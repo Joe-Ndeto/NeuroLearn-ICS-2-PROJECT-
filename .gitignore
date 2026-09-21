@@ -1,38 +1,54 @@
 # Node.js
 node_modules/
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
 .venv/
 venv/
 env/
-
-# Environment variables
-.env
-.env.*
-
-# IDE
-.vscode/*
-!.vscode/extensions.json
-!.vscode/settings.json
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-
-# Build files
-dist/
-build/
 
 # Python model/cache files
 *.pkl
 *.joblib
 
-# Temporary files
+# Environment Variables
+.env
+.env.*
+!.env.example
+
+# IDE / Editor
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Operating System
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Build / Generated Files
+dist/
+build/
+coverage/
+
+# Uploaded Learner Documents
+/storage/uploads/
+/storage/processed/
+
+# Local Database Data
+/database/data/raw/
+/database/data/processed/
+
+# Temporary Files
 *.tmp
 *.temp
+*.swp
+*.swo
