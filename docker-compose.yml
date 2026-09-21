@@ -1,0 +1,34 @@
+services:
+
+  mysql:
+    image: mysql:8.4
+    container_name: neurolearn-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: neurolearn_root
+      MYSQL_DATABASE: neurolearn
+      MYSQL_USER: neurolearn
+      MYSQL_PASSWORD: neurolearn_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/mysql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+  neo4j:
+    image: neo4j:2026.08.1
+    container_name: neurolearn-neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: neo4j/neurolearn_password
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+
+volumes:
+  mysql_data:
+  neo4j_data:
+  neo4j_logs:
