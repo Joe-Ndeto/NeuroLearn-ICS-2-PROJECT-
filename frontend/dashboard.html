@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - NeuroLearn</title>
+    <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+
+    <header>
+        <div class="logo-area">
+            <div class="logo-icon">🧠</div>
+            <span>NeuroLearn</span>
+        </div>
+        <div class="nav-links">
+            <a href="dashboard.html" class="active">Dashboard</a>
+            <a href="#">Learning Path</a>
+            <a href="#">Resources</a>
+            <a href="#">Quizzes</a>
+            <a href="#">Progress</a>
+            <a href="#">Profile</a>
+        </div>
+        <div class="user-profile">
+            <img src="https://via.placeholder.com/35" alt="User" class="user-avatar">
+            <button class="btn-logout" onclick="window.location.href='login_signup.html'">Logout</button>
+        </div>
+    </header>
+
+    <div class="main-container">
+        
+        <!-- Subheader -->
+        <div class="subheader">
+            <div class="ai-badge">AI ADAPTIVE MODE ACTIVE</div>
+            <h1>Welcome back, Learner!</h1>
+            <p>Your personalized learning journey continues. Here's what AI recommends for you today.</p>
+        </div>
+
+        <!-- Top 3 Metrics Cards -->
+        <div class="top-stats-grid">
+            
+            <!-- Overall Progress -->
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span>OVERALL PROGRESS</span>
+                    <span>📈</span>
+                </div>
+                <div class="stat-value">
+                    72% <span class="tag-success">+4% today</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" style="width: 72%;"></div>
+                </div>
+                <div class="stat-footer">Courses Completed: 18/25</div>
+            </div>
+
+            <!-- Current Mastery Level -->
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span>CURRENT MASTERY LEVEL</span>
+                    <span>🎖️</span>
+                </div>
+                <div class="stat-value" style="font-size: 1.5rem; margin-top: 5px;">
+                    Advanced Beginner
+                </div>
+                <div class="mastery-steps">
+                    <div class="step active"></div>
+                    <div class="step active"></div>
+                    <div class="step active"></div>
+                    <div class="step active"></div>
+                    <div class="step"></div>
+                    <div class="step"></div>
+                </div>
+                <div class="stat-footer" style="display: flex; justify-content: space-between;">
+                    <span class="step-label">ACTIVE</span>
+                </div>
+            </div>
+
+            <!-- Knowledge Gaps -->
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span>KNOWLEDGE GAPS</span>
+                    <span>⚠️</span>
+                </div>
+                <div class="stat-value" style="font-size: 1.4rem; margin-top: 2px;">
+                    3 Areas Identified
+                </div>
+                <div class="gaps-tags">
+                    <span class="gap-tag">Neural Networks</span>
+                    <span class="gap-tag">Backpropagation</span>
+                    <span class="gap-tag">Regularization</span>
+                </div>
+                <button class="btn-outline">Review Gaps</button>
+            </div>
+
+        </div>
+
+        <!-- Recommendation Section -->
+        <div style="margin-bottom: 40px;">
+            <div class="section-title">Recommended for You</div>
+            <div class="section-subtitle">Personalized based on your learning patterns and performance</div>
+
+            <div class="courses-grid">
+                
+                <div class="course-card">
+                    <div>
+                        <div class="course-card-top">
+                            <span class="badge-level">Intermediate</span>
+                            <span class="course-time">⏱️ 2.5 hrs</span>
+                        </div>
+                        <div class="course-title">
+                            <span>📦</span> Convolutional Neural Networks
+                        </div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+                            <span>Course Progress</span>
+                            <span>45%</span>
+                        </div>
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" style="width: 45%;"></div>
+                        </div>
+                    </div>
+                    <button class="btn-primary">Start Learning</button>
+                </div>
+
+                <div class="course-card">
+                    <div>
+                        <div class="course-card-top">
+                            <span class="badge-level">Advanced</span>
+                            <span class="course-time">⏱️ 4.0 hrs</span>
+                        </div>
+                        <div class="course-title">
+                            <span>📄</span> Natural Language Processing
+                        </div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+                            <span>Course Progress</span>
+                            <span>12%</span>
+                        </div>
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" style="width: 12%;"></div>
+                        </div>
+                    </div>
+                    <button class="btn-primary">Start Learning</button>
+                </div>
+
+                <div class="course-card">
+                    <div>
+                        <div class="course-card-top">
+                            <span class="badge-level">Beginner</span>
+                            <span class="course-time">⏱️ 3.0 hrs</span>
+                        </div>
+                        <div class="course-title">
+                            <span>⚙️</span> Reinforcement Learning
+                        </div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+                            <span>Course Progress</span>
+                            <span>0%</span>
+                        </div>
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                    <button class="btn-primary">Start Learning</button>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Bottom Grid: Activity & AI Assistant -->
+        <div class="bottom-grid">
+            
+            <!-- Recent Activity -->
+            <div class="activity-card">
+                <div class="section-title" style="margin-bottom: 20px;">Recent Activity</div>
+                
+                <div class="activity-item">
+                    <div class="activity-info">
+                        <div class="activity-icon">📊</div>
+                        <div>
+                            <div class="activity-name">Deep Learning Fundamentals Quiz</div>
+                            <div class="activity-time">2 hours ago</div>
+                        </div>
+                    </div>
+                    <div class="activity-score">85%</div>
+                </div>
+
+                <div class="activity-item">
+                    <div class="activity-info">
+                        <div class="activity-icon">📊</div>
+                        <div>
+                            <div class="activity-name">Gradient Descent Assessment</div>
+                            <div class="activity-time">Yesterday</div>
+                        </div>
+                    </div>
+                    <div class="activity-score">92%</div>
+                </div>
+
+                <div class="activity-item">
+                    <div class="activity-info">
+                        <div class="activity-icon">📊</div>
+                        <div>
+                            <div class="activity-name">Python for ML Practice</div>
+                            <div class="activity-time">2 days ago</div>
+                        </div>
+                    </div>
+                    <div class="activity-score completed">Completed</div>
+                </div>
+
+                <div class="activity-item">
+                    <div class="activity-info">
+                        <div class="activity-icon">📊</div>
+                        <div>
+                            <div class="activity-name">Statistics Review</div>
+                            <div class="activity-time">3 days ago</div>
+                        </div>
+                    </div>
+                    <div class="activity-score">78%</div>
+                </div>
+            </div>
+
+            <!-- AI Study Assistant Card -->
+            <div class="ai-assistant-card">
+                <div>
+                    <div class="ai-badge">⚡ AI COMPANION</div>
+                    <h3>AI Study Assistant</h3>
+                    <p>Your AI assistant analyzes your learning patterns to create personalized study materials.</p>
+                </div>
+                <div class="ai-actions">
+                    <button class="btn-ai">📄 Generate Summary</button>
+                    <button class="btn-ai">⏱️ Generate Quiz</button>
+                </div>
+                <div class="ai-footer">Powered by adaptive AI algorithms</div>
+            </div>
+
+        </div>
+
+    </div>
+
+</body>
+</html>
