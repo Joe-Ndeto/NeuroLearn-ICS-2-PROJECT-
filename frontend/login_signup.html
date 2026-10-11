@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login / Sign Up - NeuroLearn</title>
     <link rel="stylesheet" href="login_signup.css">
+    <script src="login_signup.js" defer></script>
 </head>
 <body>
 
@@ -17,51 +18,82 @@
         <!-- Login Form -->
         <form id="login-form" class="form-box active">
             <div class="form-group">
-                <label>Email Address</label>
-                <input type="email" required placeholder="test@example.com">
+                <label for="login-email">Email Address</label>
+                <input
+                    id="login-email"
+                    type="email"
+                    required
+                    placeholder="test@example.com"
+                >
             </div>
+
             <div class="form-group">
-                <label>Password</label>
-                <input type="password" required placeholder="••••••••">
+                <label for="login-password">Password</label>
+                <input
+                    id="login-password"
+                    type="password"
+                    required
+                    placeholder="Enter your password"
+                >
             </div>
-            <button type="submit" class="btn-submit">Login to NeuroLearn</button>
+
+            <button type="submit" class="btn-submit">
+                Login to NeuroLearn
+            </button>
         </form>
 
         <!-- Sign Up Form -->
         <form id="signup-form" class="form-box">
             <div class="form-group">
-                <label>Full Name</label>
-                <input type="text" required placeholder="Dennis Wahura">
+                <label for="signup-username">Full Name / Username</label>
+                <input
+                    id="signup-username"
+                    type="text"
+                    maxlength="100"
+                    required
+                    placeholder="Enter your name"
+                >
             </div>
+
             <div class="form-group">
-                <label>Email Address</label>
-                <input type="email" required placeholder="test@example.com">
+                <label for="signup-email">Email Address</label>
+                <input
+                    id="signup-email"
+                    type="email"
+                    required
+                    placeholder="test@example.com"
+                >
             </div>
+
             <div class="form-group">
-                <label>Password</label>
-                <input type="password" required placeholder="••••••••">
+                <label for="signup-password">Password</label>
+                <input
+                    id="signup-password"
+                    type="password"
+                    minlength="8"
+                    required
+                    placeholder="At least 8 characters"
+                >
             </div>
+
             <div class="form-group">
-                <label>Confirm Password</label>
-                <input type="password" required placeholder="••••••••">
+                <label for="signup-confirm-password">Confirm Password</label>
+                <input
+                    id="signup-confirm-password"
+                    type="password"
+                    minlength="8"
+                    required
+                    placeholder="Confirm your password"
+                >
             </div>
-            <button type="submit" class="btn-submit">Create Account</button>
+
+            <button type="submit" class="btn-submit">
+                Create Account
+            </button>
         </form>
+
+        <p id="auth-message" role="status" aria-live="polite"></p>
     </div>
 
-    <script>
-        function switchTab(tabName) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.form-box').forEach(f => f.classList.remove('active'));
-            
-            if(tabName === 'login') {
-                document.querySelectorAll('.tab')[0].classList.add('active');
-                document.getElementById('login-form').classList.add('active');
-            } else {
-                document.querySelectorAll('.tab')[1].classList.add('active');
-                document.getElementById('signup-form').classList.add('active');
-            }
-        }
-    </script>
 </body>
 </html>
