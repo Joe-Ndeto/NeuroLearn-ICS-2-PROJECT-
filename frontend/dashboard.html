@@ -224,41 +224,31 @@
 
             <!-- AI Study Assistant Card -->
             <div class="ai-assistant-card">
-                <div>
-                    <div class="ai-badge">⚡ AI COMPANION</div>
-                    <h3>AI Study Assistant</h3>
-                    <p>Your AI assistant analyzes your learning patterns to create personalized study materials.</p>
-                </div>
-                <div class="ai-actions">
-                    <label for="document-file">Upload learning material (PDF, Word or PowerPoint)</label>
-                    <input type="file" id="document-file" accept=".pdf,.docx,.pptx">
 
-                    <button type="button" id="upload-document" class="btn-ai">
-                        Upload Document
-                    </button>
+                <section class="ai-study-card">
+                    <div class="ai-study-content">
+                        <span class="ai-badge">AI STUDY PARTNER</span>
 
-                    <p id="document-status" role="status">
-                        Select a document to begin.
-                    </p>
+                        <h2>Your learning space, powered by AI</h2>
 
-                    <label for="document-select">Choose a processed document</label>
-                    <select id="document-select">
-                        <option value="">Upload a document first</option>
-                    </select>
+                        <p>
+                            Upload your lecture notes, ask questions, understand difficult
+                            concepts, generate summaries, and test your knowledge with
+                            interactive quizzes.
+                        </p>
 
-                    <button type="button" id="generate-summary" class="btn-ai">
-                        📄 Generate Summary
-                    </button>
+                        <a href="study.html" class="btn-ai">
+                            Open Study Workspace →
+                        </a>
+                    </div>
+                </section>
 
-                    <button type="button" id="generate-quiz" class="btn-ai">
-                        ⏱️ Generate Quiz
-                    </button>
-                </div>
-
-                <div id="ai-results" aria-live="polite"></div>
             </div>
-            <div class="ai-footer">Powered by adaptive AI algorithms</div>
+
+            <div id="ai-results" aria-live="polite"></div>
         </div>
+        <div class="ai-footer">Powered by adaptive AI algorithms</div>
+    </div>
 
     </div>
 
