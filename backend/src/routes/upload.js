@@ -1,3 +1,4 @@
+
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
@@ -24,11 +25,7 @@ const processorScript = path.join(
     'document_processor.py'
 );
 
-const uploadFolder = path.join(
-    projectRoot,
-    'storage',
-    'uploads'
-);
+const uploadFolder = path.join(projectRoot, 'storage', 'uploads');
 
 fs.mkdirSync(uploadFolder, { recursive: true });
 
@@ -38,9 +35,7 @@ const storage = multer.diskStorage({
     },
 
     filename: (req, file, cb) => {
-        const uniqueName =
-            `${Date.now()}-${path.basename(file.originalname)}`;
-
+        const uniqueName = `${Date.now()}-${path.basename(file.originalname)}`;
         cb(null, uniqueName);
     }
 });
@@ -58,9 +53,7 @@ const upload = multer({
         if (allowedTypes.includes(extension)) {
             cb(null, true);
         } else {
-            cb(new Error(
-                'Only PDF, DOCX and PPTX files are supported.'
-            ));
+            cb(new Error('Only PDF, DOCX and PPTX files are supported.'));
         }
     }
 });
@@ -87,7 +80,40 @@ function processDocument(filePath) {
     });
 }
 
+// TEMPORARY: Replace with the authenticated learner ID
+// when server-side authentication is implemented.
+const learnerId = 1;
+
+// GET /api/upload - retrieve documents for the current development learner
+router.get('/', async (req, res) => {
+    try {
+        const [documents] = await mysql.execute(
+            `SELECT
+                document_id,
+                filename,
+                file_type,
+                file_size,
+                upload_date,
+                processing_status
+             FROM uploaded_document
+             WHERE learner_id = ?
+             ORDER BY upload_date DESC`,
+            [learnerId]
+        );
+
+        return res.json({ documents });
+    } catch (error) {
+        console.error('Could not retrieve documents:', error.message);
+
+        return res.status(500).json({
+            message: 'Unable to retrieve uploaded documents.'
+        });
+    }
+});
+
+// POST /api/upload - upload and process a document
 router.post('/', (req, res, next) => {
+    // Must match formData.append('document', file) in dashboard.js
     upload.single('document')(req, res, error => {
         if (error) {
             const status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
@@ -108,13 +134,8 @@ router.post('/', (req, res, next) => {
         });
     }
 
-    // TEMPORARY: Replace with the authenticated learner ID
-    // once server-side authentication is implemented.
-    const learnerId = 1;
-
     const extension = path.extname(req.file.originalname).toLowerCase();
     const fileType = extension.substring(1);
-
     const filePath = path.relative(projectRoot, req.file.path);
 
     let documentId;
@@ -157,7 +178,6 @@ router.post('/', (req, res, next) => {
                     processingStatus: 'processed'
                 }
             });
-
         } catch (processingError) {
             await mysql.execute(
                 `UPDATE uploaded_document
@@ -175,7 +195,6 @@ router.post('/', (req, res, next) => {
                 }
             });
         }
-
     } catch (error) {
         console.error('Upload error:', error.message);
 
