@@ -52,10 +52,13 @@ async function sendAuthRequest(endpoint, data) {
             return;
         }
 
-        message.textContent =
-            `Welcome, ${result.learner.username}!`;
+        sessionStorage.setItem(
+            'neurolearnLearner',
+            JSON.stringify(result.learner)
+        );
 
-        console.log('Learner account:', result.learner);
+        window.location.href = '/dashboard.html';
+        return;
 
     } catch (error) {
         message.textContent = error.message;
