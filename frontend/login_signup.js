@@ -57,8 +57,10 @@ async function sendAuthRequest(endpoint, data) {
             JSON.stringify(result.learner)
         );
 
-        window.location.href = '/dashboard.html';
-        return;
+        window.location.href = new URL(
+            'dashboard.html',
+            window.location.href
+        ).href;
 
     } catch (error) {
         message.textContent = error.message;
