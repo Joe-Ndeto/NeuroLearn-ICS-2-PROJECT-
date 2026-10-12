@@ -1,3 +1,4 @@
+
 const express = require('express');
 const path = require('path');
 const fs = require('fs/promises');
@@ -11,13 +12,15 @@ const ai = new GoogleGenAI({
 });
 
 const MODEL = 'gemini-3.8-flash';
+
 const projectRoot = path.resolve(__dirname, '../../..');
-const processedFolder = path.join(
+const processedFolder = path.resolve(
     projectRoot,
     'storage',
     'processed'
 );
 
+// Retrieve extracted text using the unique stored upload filename.
 async function getProcessedText(documentId) {
     if (!Number.isInteger(documentId) || documentId < 1) {
         const error = new Error('A valid document ID is required.');
@@ -26,7 +29,11 @@ async function getProcessedText(documentId) {
     }
 
     const [documents] = await mysql.execute(
-        `SELECT document_id, filename, processing_status
+        `SELECT
+            document_id,
+            filename,
+            file_path,
+            processing_status
          FROM uploaded_document
          WHERE document_id = ?`,
         [documentId]
@@ -48,20 +55,45 @@ async function getProcessedText(documentId) {
         throw error;
     }
 
-    // The current processor saves text using the original filename stem.
-    const textFilename =
-        `${path.parse(document.filename).name}.txt`;
+    if (!document.file_path) {
+        const error = new Error(
+            'The stored upload path is missing for this document.'
+        );
+        error.status = 422;
+        throw error;
+    }
 
-    const textPath = path.join(processedFolder, textFilename);
+    // Example stored path:
+    // storage/uploads/1791803589374-Lecture 8 Cloud Auditing.pdf
+    const storedUploadName = path.basename(document.file_path);
+    const storedStem = path.parse(storedUploadName).name;
+    const textFilename = `${storedStem}.txt`;
 
-    // Ensure the resolved path remains within the processed folder.
+    const textPath = path.resolve(processedFolder, textFilename);
+
+    // Prevent reading files outside the processed folder.
     if (path.dirname(textPath) !== processedFolder) {
         const error = new Error('Invalid processed document path.');
         error.status = 400;
         throw error;
     }
 
-    const text = await fs.readFile(textPath, 'utf8');
+    let text;
+
+    try {
+        text = await fs.readFile(textPath, 'utf8');
+    } catch (readError) {
+        if (readError.code === 'ENOENT') {
+            const error = new Error(
+                `Extracted text file not found: ${textFilename}. ` +
+                'The document may need to be processed again.'
+            );
+            error.status = 404;
+            throw error;
+        }
+
+        throw readError;
+    }
 
     if (!text.trim()) {
         const error = new Error('The extracted document text is empty.');
@@ -71,8 +103,8 @@ async function getProcessedText(documentId) {
 
     if (text.length > 30000) {
         const error = new Error(
-            'This document is too long for this first version. ' +
-            'Please use a shorter note.'
+            'This document exceeds the current 30,000-character limit. ' +
+            'Please use shorter notes for now.'
         );
         error.status = 413;
         throw error;
@@ -81,7 +113,7 @@ async function getProcessedText(documentId) {
     return text;
 }
 
-// Generate a summary
+// Generate a summary.
 router.post('/summarize', async (req, res) => {
     try {
         const documentId = Number(req.body.documentId);
@@ -91,7 +123,7 @@ router.post('/summarize', async (req, res) => {
             model: MODEL,
             contents: [
                 'You are NeuroLearn, an educational study assistant.',
-                'Summarize the following lecture notes using headings.',
+                'Summarize the following lecture notes using clear headings.',
                 'Include the main topics, definitions, key points,',
                 'and a brief revision recap. Do not invent facts.',
                 '',
@@ -108,19 +140,20 @@ router.post('/summarize', async (req, res) => {
             documentId,
             summary: response.text
         });
-
     } catch (error) {
         console.error('Summary error:', error.message);
 
-        return res.status(error.status || 502).json({
+        const status = error.status || 502;
+
+        return res.status(status).json({
             error: error.status
                 ? error.message
-                : 'Could not generate a summary. Check the Gemini API key, model access and quota.'
+                : 'Gemini could not generate the summary. Check the backend terminal for the API error.'
         });
     }
 });
 
-// Generate a multiple-choice quiz
+// Generate a multiple-choice quiz.
 router.post('/quiz', async (req, res) => {
     try {
         const documentId = Number(req.body.documentId);
@@ -180,14 +213,15 @@ router.post('/quiz', async (req, res) => {
             documentId,
             ...quiz
         });
-
     } catch (error) {
         console.error('Quiz error:', error.message);
 
-        return res.status(error.status || 502).json({
+        const status = error.status || 502;
+
+        return res.status(status).json({
             error: error.status
                 ? error.message
-                : 'Could not generate a quiz. Check the Gemini API key, model access and quota.'
+                : 'Gemini could not generate the quiz. Check the backend terminal for the API error.'
         });
     }
 });
