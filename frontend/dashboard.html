@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard - NeuroLearn</title>
     <link rel="stylesheet" href="dashboard.css">
 </head>
+
 <body>
 
     <header>
@@ -28,7 +30,7 @@
     </header>
 
     <div class="main-container">
-        
+
         <!-- Subheader -->
         <div class="subheader">
             <div class="ai-badge">AI ADAPTIVE MODE ACTIVE</div>
@@ -38,7 +40,7 @@
 
         <!-- Top 3 Metrics Cards -->
         <div class="top-stats-grid">
-            
+
             <!-- Overall Progress -->
             <div class="stat-card">
                 <div class="stat-header">
@@ -101,7 +103,7 @@
             <div class="section-subtitle">Personalized based on your learning patterns and performance</div>
 
             <div class="courses-grid">
-                
+
                 <div class="course-card">
                     <div>
                         <div class="course-card-top">
@@ -111,7 +113,8 @@
                         <div class="course-title">
                             <span>📦</span> Convolutional Neural Networks
                         </div>
-                        <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+                        <div
+                            style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
                             <span>Course Progress</span>
                             <span>45%</span>
                         </div>
@@ -131,7 +134,8 @@
                         <div class="course-title">
                             <span>📄</span> Natural Language Processing
                         </div>
-                        <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+                        <div
+                            style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
                             <span>Course Progress</span>
                             <span>12%</span>
                         </div>
@@ -151,7 +155,8 @@
                         <div class="course-title">
                             <span>⚙️</span> Reinforcement Learning
                         </div>
-                        <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+                        <div
+                            style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
                             <span>Course Progress</span>
                             <span>0%</span>
                         </div>
@@ -167,11 +172,11 @@
 
         <!-- Bottom Grid: Activity & AI Assistant -->
         <div class="bottom-grid">
-            
+
             <!-- Recent Activity -->
             <div class="activity-card">
                 <div class="section-title" style="margin-bottom: 20px;">Recent Activity</div>
-                
+
                 <div class="activity-item">
                     <div class="activity-info">
                         <div class="activity-icon">📊</div>
@@ -225,15 +230,40 @@
                     <p>Your AI assistant analyzes your learning patterns to create personalized study materials.</p>
                 </div>
                 <div class="ai-actions">
-                    <button class="btn-ai">📄 Generate Summary</button>
-                    <button class="btn-ai">⏱️ Generate Quiz</button>
-                </div>
-                <div class="ai-footer">Powered by adaptive AI algorithms</div>
-            </div>
+                    <label for="document-file">Upload learning material (PDF, Word or PowerPoint)</label>
+                    <input type="file" id="document-file" accept=".pdf,.docx,.pptx">
 
+                    <button type="button" id="upload-document" class="btn-ai">
+                        Upload Document
+                    </button>
+
+                    <p id="document-status" role="status">
+                        Select a document to begin.
+                    </p>
+
+                    <label for="document-select">Choose a processed document</label>
+                    <select id="document-select">
+                        <option value="">Upload a document first</option>
+                    </select>
+
+                    <button type="button" id="generate-summary" class="btn-ai">
+                        📄 Generate Summary
+                    </button>
+
+                    <button type="button" id="generate-quiz" class="btn-ai">
+                        ⏱️ Generate Quiz
+                    </button>
+                </div>
+
+                <div id="ai-results" aria-live="polite"></div>
+            </div>
+            <div class="ai-footer">Powered by adaptive AI algorithms</div>
         </div>
+
+    </div>
 
     </div>
     <script src="dashboard.js" defer></script>
 </body>
+
 </html>

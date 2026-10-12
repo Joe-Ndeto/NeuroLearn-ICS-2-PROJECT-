@@ -10,8 +10,7 @@ const ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY
 });
 
-// Use a model available to your Gemini API key.
-const MODEL = 'gemini-flash-latest';
+const MODEL = 'gemini-3.8-flash';
 const projectRoot = path.resolve(__dirname, '../../..');
 const processedFolder = path.join(
     projectRoot,
