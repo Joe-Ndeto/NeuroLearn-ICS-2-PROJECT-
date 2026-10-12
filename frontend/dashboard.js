@@ -85,7 +85,7 @@ if (uploadButton && fileInput) {
         }
 
         const formData = new FormData();
-        formData.append('file', file);
+        formData.append('document', file);
 
         uploadButton.disabled = true;
         showStatus('Uploading and processing your document...');
