@@ -2,22 +2,22 @@
 const API_BASE_URL = 'http://localhost:5000/api';
 
 const storedLearner = sessionStorage.getItem('neurolearnLearner');
+let learner = null;
 
 if (!storedLearner) {
     window.location.replace('login_signup.html');
-}
+} else {
+    try {
+        learner = JSON.parse(storedLearner);
 
-let learner = null;
-
-try {
-    learner = JSON.parse(storedLearner || 'null');
-
-    if (!learner) {
+        if (!learner) {
+            throw new Error('Learner information is missing.');
+        }
+    } catch (error) {
+        console.error('Could not load learner information:', error);
+        sessionStorage.removeItem('neurolearnLearner');
         window.location.replace('login_signup.html');
     }
-} catch (error) {
-    sessionStorage.removeItem('neurolearnLearner');
-    window.location.replace('login_signup.html');
 }
 
 const learnerName = document.getElementById('learner-name');
@@ -30,6 +30,10 @@ const documentList = document.getElementById('document-list');
 const documentStatus = document.getElementById('document-status');
 const selectedDocumentName = document.getElementById('selected-document-name');
 const selectedDocumentStatus = document.getElementById('selected-document-status');
+
+const summaryButton = document.getElementById('summary-button');
+const panelSummaryButton = document.getElementById('panel-summary-button');
+const summaryResult = document.getElementById('summary-result');
 
 let documents = [];
 let selectedDocumentId = null;
@@ -46,7 +50,9 @@ if (logoutButton) {
 }
 
 function setDocumentStatus(message) {
-    documentStatus.textContent = message;
+    if (documentStatus) {
+        documentStatus.textContent = message;
+    }
 }
 
 async function readResponse(response) {
@@ -60,15 +66,20 @@ async function readResponse(response) {
 
     if (!response.ok) {
         throw new Error(
-            data.message || data.error || `Request failed (${response.status}).`
+            data.message ||
+            data.error ||
+            `Request failed (${response.status}).`
         );
     }
 
     return data;
 }
 
+// Display uploaded documents.
 function renderDocuments() {
-    const searchTerm = searchInput.value.trim().toLowerCase();
+    if (!documentList) return;
+
+    const searchTerm = searchInput?.value.trim().toLowerCase() || '';
 
     const filteredDocuments = documents.filter(item =>
         item.filename.toLowerCase().includes(searchTerm)
@@ -82,6 +93,7 @@ function renderDocuments() {
         emptyMessage.textContent = searchTerm
             ? 'No matching documents found.'
             : 'No uploaded documents found. Upload your first document.';
+
         documentList.appendChild(emptyMessage);
         return;
     }
@@ -111,9 +123,7 @@ function renderDocuments() {
         details.append(name, status);
         button.append(icon, details);
 
-        button.addEventListener('click', () => {
-            selectDocument(item);
-        });
+        button.addEventListener('click', () => selectDocument(item));
 
         documentList.appendChild(button);
     });
@@ -122,22 +132,30 @@ function renderDocuments() {
 function selectDocument(item) {
     selectedDocumentId = item.document_id;
 
-    selectedDocumentName.textContent = item.filename;
-    selectedDocumentStatus.textContent =
-        `Document ID: ${item.document_id} · Status: ${item.processing_status}`;
+    if (selectedDocumentName) {
+        selectedDocumentName.textContent = item.filename;
+    }
+
+    if (selectedDocumentStatus) {
+        selectedDocumentStatus.textContent =
+            `Document ID: ${item.document_id} · Status: ${item.processing_status}`;
+    }
 
     renderDocuments();
 
     if (item.processing_status !== 'processed') {
         setDocumentStatus(
-            'This document is not processed yet. Select a processed document to use AI features.'
+            'This document is not processed yet. Please select a processed document.'
         );
     } else {
         setDocumentStatus(`Selected: ${item.filename}`);
     }
 }
 
-async function loadDocuments() {
+// Load document records from MySQL through the backend.
+async function loadDocuments(options = {}) {
+    const { selectDocumentId = null } = options;
+
     setDocumentStatus('Loading your documents...');
 
     try {
@@ -154,24 +172,41 @@ async function loadDocuments() {
                     item.processing_status || item.processingStatus || 'unknown'
             }));
 
-        if (
-            selectedDocumentId &&
-            !documents.some(
-                item => String(item.document_id) === String(selectedDocumentId)
-            )
-        ) {
-            selectedDocumentId = null;
+        if (selectDocumentId != null) {
+            selectedDocumentId = selectDocumentId;
         }
 
-        if (selectedDocumentId) {
-            const selected = documents.find(
-                item => String(item.document_id) === String(selectedDocumentId)
-            );
+        let selected = documents.find(
+            item => String(item.document_id) === String(selectedDocumentId)
+        );
 
-            if (selected) {
+        if (!selected && documents.length > 0) {
+            selected = documents.find(
+                item => item.processing_status === 'processed'
+            ) || documents[0];
+
+            selectedDocumentId = selected.document_id;
+        }
+
+        if (selected) {
+            if (selectedDocumentName) {
                 selectedDocumentName.textContent = selected.filename;
+            }
+
+            if (selectedDocumentStatus) {
                 selectedDocumentStatus.textContent =
                     `Document ID: ${selected.document_id} · Status: ${selected.processing_status}`;
+            }
+        } else {
+            selectedDocumentId = null;
+
+            if (selectedDocumentName) {
+                selectedDocumentName.textContent = 'No document selected';
+            }
+
+            if (selectedDocumentStatus) {
+                selectedDocumentStatus.textContent =
+                    'Upload or select a document to begin.';
             }
         }
 
@@ -183,56 +218,169 @@ async function loadDocuments() {
     }
 }
 
-uploadButton.addEventListener('click', async () => {
-    const file = fileInput.files[0];
+// Upload a new document and select it after processing.
+if (uploadButton && fileInput) {
+    uploadButton.addEventListener('click', async () => {
+        const file = fileInput.files[0];
 
-    if (!file) {
-        setDocumentStatus('Choose a PDF, DOCX, or PPTX file first.');
+        if (!file) {
+            setDocumentStatus('Please choose a PDF, DOCX, or PPTX file first.');
+            return;
+        }
+
+        const extension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+
+        if (!['.pdf', '.docx', '.pptx'].includes(extension)) {
+            setDocumentStatus('Only PDF, DOCX and PPTX files are supported.');
+            return;
+        }
+
+        if (file.size > 10 * 1024 * 1024) {
+            setDocumentStatus('The file must not exceed 10 MB.');
+            return;
+        }
+
+        const formData = new FormData();
+
+        // Matches upload.single('document') in the Express backend.
+        formData.append('document', file);
+
+        uploadButton.disabled = true;
+        uploadButton.textContent = 'Uploading...';
+
+        setDocumentStatus(
+            'Uploading and processing your document. Please wait...'
+        );
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/upload`, {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await readResponse(response);
+            const newDocumentId = data.file?.documentId;
+
+            await loadDocuments({
+                selectDocumentId: newDocumentId ?? null
+            });
+
+            if (newDocumentId) {
+                const uploadedDocument = documents.find(
+                    item => String(item.document_id) === String(newDocumentId)
+                );
+
+                if (uploadedDocument) {
+                    selectDocument(uploadedDocument);
+                }
+            }
+
+            fileInput.value = '';
+
+            setDocumentStatus(
+                data.message || 'Document uploaded successfully.'
+            );
+        } catch (error) {
+            console.error('Document upload failed:', error);
+            setDocumentStatus(`Upload failed: ${error.message}`);
+        } finally {
+            uploadButton.disabled = false;
+            uploadButton.textContent = 'Upload Selected File';
+        }
+    });
+}
+
+if (refreshButton) {
+    refreshButton.addEventListener('click', () => loadDocuments());
+}
+
+if (searchInput) {
+    searchInput.addEventListener('input', renderDocuments);
+}
+
+// Generate a summary from the currently selected document.
+async function generateDocumentSummary() {
+    if (!selectedDocumentId) {
+        setDocumentStatus('Please select a document first.');
         return;
     }
 
-    const formData = new FormData();
-    formData.append('document', file);
+    const selected = documents.find(
+        item => String(item.document_id) === String(selectedDocumentId)
+    );
 
-    uploadButton.disabled = true;
-    setDocumentStatus('Uploading and processing your document...');
+    if (!selected || selected.processing_status !== 'processed') {
+        setDocumentStatus('Please select a processed document.');
+        return;
+    }
+
+    const buttons = [summaryButton, panelSummaryButton].filter(Boolean);
+
+    buttons.forEach(button => {
+        button.disabled = true;
+        button.textContent = 'Generating...';
+    });
+
+    if (summaryResult) {
+        summaryResult.textContent =
+            'NeuroLearn is reading your notes and generating a summary...';
+    }
+
+    setDocumentStatus('Generating summary with Gemini...');
 
     try {
-        const response = await fetch(`${API_BASE_URL}/upload`, {
+        const response = await fetch(`${API_BASE_URL}/ai/summarize`, {
             method: 'POST',
-            body: formData
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                documentId: Number(selectedDocumentId)
+            })
         });
 
         const data = await readResponse(response);
 
-        await loadDocuments();
-
-        const newId = data.file?.documentId;
-
-        if (newId) {
-            const uploadedDocument = documents.find(
-                item => String(item.document_id) === String(newId)
-            );
-
-            if (uploadedDocument) {
-                selectDocument(uploadedDocument);
-            }
+        if (!data.summary) {
+            throw new Error('The server did not return a summary.');
         }
 
-        fileInput.value = '';
-        setDocumentStatus(data.message || 'Upload completed.');
+        if (summaryResult) {
+            summaryResult.textContent = data.summary;
+        }
+
+        setDocumentStatus('Summary generated successfully.');
     } catch (error) {
-        console.error('Document upload failed:', error);
-        setDocumentStatus(`Upload failed: ${error.message}`);
+        console.error('Summary generation failed:', error);
+
+        if (summaryResult) {
+            summaryResult.textContent =
+                `Could not generate summary: ${error.message}`;
+        }
+
+        setDocumentStatus(`Summary failed: ${error.message}`);
     } finally {
-        uploadButton.disabled = false;
+        if (summaryButton) {
+            summaryButton.disabled = false;
+            summaryButton.textContent = 'Summarize';
+        }
+
+        if (panelSummaryButton) {
+            panelSummaryButton.disabled = false;
+            panelSummaryButton.textContent = 'Generate Summary';
+        }
     }
-});
+}
 
-refreshButton.addEventListener('click', loadDocuments);
-searchInput.addEventListener('input', renderDocuments);
+if (summaryButton) {
+    summaryButton.addEventListener('click', generateDocumentSummary);
+}
 
-// Switch between Summary, Quiz, and Notes tabs.
+if (panelSummaryButton) {
+    panelSummaryButton.addEventListener('click', generateDocumentSummary);
+}
+
+// Switch between Summary, Quiz and Notes tabs.
 document.querySelectorAll('.study-tab').forEach(button => {
     button.addEventListener('click', () => {
         document.querySelectorAll('.study-tab').forEach(tab => {
@@ -247,4 +395,7 @@ document.querySelectorAll('.study-tab').forEach(button => {
     });
 });
 
-loadDocuments();
+// Initial load.
+if (learner) {
+    loadDocuments();
+}
