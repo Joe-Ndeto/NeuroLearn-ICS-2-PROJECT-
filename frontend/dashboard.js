@@ -2,7 +2,6 @@
 const API_BASE_URL = 'http://localhost:5000/api';
 
 const storedLearner = sessionStorage.getItem('neurolearnLearner');
-
 let learner = null;
 
 if (!storedLearner) {
@@ -11,20 +10,20 @@ if (!storedLearner) {
     try {
         learner = JSON.parse(storedLearner);
 
-        const learnerName = document.getElementById('learner-name');
+        const learnerName = window.document.getElementById('learner-name');
 
         if (learnerName && learner.username) {
             learnerName.textContent = learner.username;
         }
     } catch (error) {
         console.error('Could not load learner information:', error);
-
         sessionStorage.removeItem('neurolearnLearner');
         window.location.replace('login_signup.html');
     }
 }
 
-const logoutButton = document.getElementById('logout-button');
+// Logout
+const logoutButton = window.document.getElementById('logout-button');
 
 if (logoutButton) {
     logoutButton.addEventListener('click', function () {
@@ -33,13 +32,14 @@ if (logoutButton) {
     });
 }
 
-const fileInput = document.getElementById('document-file');
-const uploadButton = document.getElementById('upload-document');
-const documentStatus = document.getElementById('document-status');
-const documentSelect = document.getElementById('document-select');
-const summaryButton = document.getElementById('generate-summary');
-const quizButton = document.getElementById('generate-quiz');
-const aiResults = document.getElementById('ai-results');
+// Dashboard elements
+const fileInput = window.document.getElementById('document-file');
+const uploadButton = window.document.getElementById('upload-document');
+const documentStatus = window.document.getElementById('document-status');
+const documentSelect = window.document.getElementById('document-select');
+const summaryButton = window.document.getElementById('generate-summary');
+const quizButton = window.document.getElementById('generate-quiz');
+const aiResults = window.document.getElementById('ai-results');
 
 function showStatus(message) {
     if (documentStatus) {
@@ -52,29 +52,39 @@ function showResult(title, content) {
 
     aiResults.replaceChildren();
 
-    const heading = document.createElement('h3');
+    const heading = window.document.createElement('h3');
     heading.textContent = title;
 
-    const resultText = document.createElement('pre');
+    const resultText = window.document.createElement('pre');
     resultText.style.whiteSpace = 'pre-wrap';
-    resultText.textContent =
-        typeof content === 'string'
-            ? content
-            : JSON.stringify(content, null, 2);
+    resultText.style.overflowWrap = 'anywhere';
+
+    resultText.textContent = typeof content === 'string'
+        ? content
+        : JSON.stringify(content, null, 2);
 
     aiResults.append(heading, resultText);
 }
 
 async function readResponse(response) {
-    const data = await response.json();
+    let data;
+
+    try {
+        data = await response.json();
+    } catch {
+        throw new Error('The server returned an invalid response.');
+    }
 
     if (!response.ok) {
-        throw new Error(data.message || data.error || 'The request failed.');
+        throw new Error(
+            data.message || data.error || `Request failed (${response.status}).`
+        );
     }
 
     return data;
 }
 
+// Upload a document
 if (uploadButton && fileInput) {
     uploadButton.addEventListener('click', async function () {
         const file = fileInput.files[0];
@@ -85,6 +95,8 @@ if (uploadButton && fileInput) {
         }
 
         const formData = new FormData();
+
+        // Must match upload.single('document') in the backend.
         formData.append('document', file);
 
         uploadButton.disabled = true;
@@ -98,11 +110,14 @@ if (uploadButton && fileInput) {
 
             const data = await readResponse(response);
 
-            showStatus(
-                data.message || 'Document uploaded successfully.'
-            );
+            showStatus(data.message || 'Document uploaded successfully.');
 
-            await loadDocuments();
+            // Refresh the dropdown and select the newly uploaded document.
+            const newDocumentId = data.file?.documentId;
+
+            await loadDocuments(newDocumentId);
+
+            fileInput.value = '';
         } catch (error) {
             console.error('Document upload failed:', error);
             showStatus(`Upload failed: ${error.message}`);
@@ -112,8 +127,12 @@ if (uploadButton && fileInput) {
     });
 }
 
-async function loadDocuments() {
+// Load documents from MySQL through the backend.
+async function loadDocuments(selectDocumentId = null) {
     if (!documentSelect) return;
+
+    // Keep the previous selection if no new document ID was supplied.
+    const previousSelection = documentSelect.value;
 
     try {
         const response = await fetch(`${API_BASE_URL}/upload`);
@@ -125,7 +144,7 @@ async function loadDocuments() {
 
         documentSelect.replaceChildren();
 
-        const defaultOption = document.createElement('option');
+        const defaultOption = window.document.createElement('option');
         defaultOption.value = '';
         defaultOption.textContent = documents.length
             ? 'Choose a document'
@@ -133,23 +152,43 @@ async function loadDocuments() {
 
         documentSelect.appendChild(defaultOption);
 
-        documents.forEach(function (document) {
-            const option = document.createElement('option');
-            option.value = document.document_id ?? document.documentId;
+        documents.forEach(function (item) {
+            // Use "item", not "document", to avoid shadowing
+            // the browser's built-in document object.
+            const option = window.document.createElement('option');
 
-            const filename = document.filename || 'Untitled document';
-            const status = document.processing_status || 'unknown';
+            const id = item.document_id ?? item.documentId;
+            const filename = item.filename || item.originalName || 'Untitled document';
+            const status = item.processing_status
+                || item.processingStatus
+                || 'unknown';
 
+            option.value = String(id);
             option.textContent = `${filename} (${status})`;
             option.dataset.status = status;
 
             documentSelect.appendChild(option);
         });
+
+        const desiredSelection = selectDocumentId != null
+            ? String(selectDocumentId)
+            : previousSelection;
+
+        if (
+            desiredSelection &&
+            Array.from(documentSelect.options).some(
+                option => option.value === desiredSelection
+            )
+        ) {
+            documentSelect.value = desiredSelection;
+        }
     } catch (error) {
         console.error('Could not load documents:', error);
+        showStatus(`Could not load documents: ${error.message}`);
     }
 }
 
+// Generate a summary or quiz using the selected processed document.
 async function requestAI(endpoint, body, title) {
     const documentId = documentSelect?.value;
 
@@ -159,14 +198,16 @@ async function requestAI(endpoint, body, title) {
     }
 
     const selectedOption = documentSelect.selectedOptions[0];
+    const status = selectedOption?.dataset.status;
 
-    if (
-        selectedOption?.dataset.status &&
-        selectedOption.dataset.status !== 'processed'
-    ) {
-        showStatus('This document is not processed yet. Please wait.');
+    if (status !== 'processed') {
+        showStatus('This document is not processed yet. Please select a processed document.');
         return;
     }
+
+    const button = endpoint === 'summarize' ? summaryButton : quizButton;
+
+    if (button) button.disabled = true;
 
     showStatus(`${title} is being generated...`);
 
@@ -184,30 +225,36 @@ async function requestAI(endpoint, body, title) {
 
         const data = await readResponse(response);
 
-        showResult(
-            title,
-            data.summary ?? data.quiz ?? data.questions ?? data
-        );
+        const result = data.summary
+            ?? data.quiz
+            ?? data.questions
+            ?? data;
 
+        showResult(title, result);
         showStatus(`${title} generated successfully.`);
     } catch (error) {
         console.error(`${title} failed:`, error);
         showStatus(`${title} failed: ${error.message}`);
+    } finally {
+        if (button) button.disabled = false;
     }
 }
 
+// Summary button
 if (summaryButton) {
     summaryButton.addEventListener('click', function () {
         requestAI('summarize', {}, 'Document Summary');
     });
 }
 
+// Quiz button
 if (quizButton) {
     quizButton.addEventListener('click', function () {
         requestAI('quiz', { questionCount: 5 }, 'Practice Quiz');
     });
 }
 
+// Initial load
 if (learner) {
     loadDocuments();
 }
