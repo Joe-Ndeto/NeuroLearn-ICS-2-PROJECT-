@@ -7,11 +7,15 @@ const mysql = require('../config/mysql');
 
 const router = express.Router();
 
+if (!process.env.GEMINI_API_KEY) {
+    console.warn('Warning: GEMINI_API_KEY is not configured.');
+}
+
 const ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY
 });
 
-const MODEL = 'gemini-3.8-flash';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 
 const projectRoot = path.resolve(__dirname, '../../..');
 const processedFolder = path.resolve(
@@ -20,7 +24,7 @@ const processedFolder = path.resolve(
     'processed'
 );
 
-// Read the extracted text for a document.
+// Read extracted text for a processed document.
 async function getProcessedText(documentId) {
     if (!Number.isInteger(documentId) || documentId < 1) {
         const error = new Error('A valid document ID is required.');
@@ -64,7 +68,6 @@ async function getProcessedText(documentId) {
     const textFilename = `${storedStem}.txt`;
     const textPath = path.resolve(processedFolder, textFilename);
 
-    // Prevent paths outside the processed folder.
     if (path.dirname(textPath) !== processedFolder) {
         const error = new Error('Invalid processed document path.');
         error.status = 400;
@@ -78,7 +81,7 @@ async function getProcessedText(documentId) {
     } catch (readError) {
         if (readError.code === 'ENOENT') {
             const error = new Error(
-                'The extracted text file could not be found. Please upload the document again.'
+                'Extracted text was not found. Please upload the document again.'
             );
             error.status = 404;
             throw error;
@@ -99,15 +102,50 @@ async function getProcessedText(documentId) {
 
     if (text.length > 30000) {
         const error = new Error(
-            'This document is too long for the current AI processing limit.'
+            'This document exceeds the current AI processing limit.'
         );
         error.status = 413;
         throw error;
     }
 
+    return { document, text };
+}
+
+// Extract real web sources from Gemini's grounding metadata.
+function getWebSources(response) {
+    const candidates = response.candidates || [];
+    const metadata = candidates[0]?.groundingMetadata;
+    const chunks = metadata?.groundingChunks || [];
+    const uniqueSources = new Map();
+
+    for (const chunk of chunks) {
+        const web = chunk.web;
+
+        if (!web?.uri || !web?.title) {
+            continue;
+        }
+
+        try {
+            const url = new URL(web.uri);
+
+            if (!['http:', 'https:'].includes(url.protocol)) {
+                continue;
+            }
+
+            if (!uniqueSources.has(url.href)) {
+                uniqueSources.set(url.href, {
+                    title: web.title,
+                    url: url.href
+                });
+            }
+        } catch {
+            // Ignore malformed source URLs.
+        }
+    }
+
     return {
-        document,
-        text
+        sources: Array.from(uniqueSources.values()),
+        searchPerformed: Boolean(metadata)
     };
 }
 
@@ -124,7 +162,7 @@ function handleAIError(res, error, action) {
     });
 }
 
-// Generate a summary.
+// Generate a summary from uploaded lecture notes.
 router.post('/summarize', async (req, res) => {
     try {
         const documentId = Number(req.body.documentId);
@@ -134,16 +172,17 @@ router.post('/summarize', async (req, res) => {
             model: MODEL,
             contents: [
                 'You are NeuroLearn, an educational study assistant.',
-                'Summarize the following lecture notes using clear headings.',
-                'Include the main topics, definitions, key points,',
-                'and a brief revision recap. Do not invent facts.',
+                'Summarize these lecture notes using clear Markdown formatting.',
+                'Use headings, short paragraphs, bullet points, and numbered steps where appropriate.',
+                'Include important topics, definitions, key points, and a brief revision recap.',
+                'Do not invent facts.',
                 '',
                 'LECTURE NOTES:',
                 text
             ].join('\n')
         });
 
-        if (!response.text || !response.text.trim()) {
+        if (!response.text?.trim()) {
             throw new Error('The AI returned an empty summary.');
         }
 
@@ -156,7 +195,7 @@ router.post('/summarize', async (req, res) => {
     }
 });
 
-// Answer questions using the selected document.
+// Answer using lecture notes and Google Search grounding.
 router.post('/chat', async (req, res) => {
     try {
         const documentId = Number(req.body.documentId);
@@ -174,39 +213,68 @@ router.post('/chat', async (req, res) => {
             });
         }
 
-        const { text } = await getProcessedText(documentId);
+        const { document, text } = await getProcessedText(documentId);
 
         const response = await ai.models.generateContent({
             model: MODEL,
             contents: [
-                'You are NeuroLearn, a helpful educational study assistant.',
-                'Answer the learner using the supplied lecture notes as your primary source.',
-                'Explain concepts clearly and at an appropriate student level.',
-                'If the notes do not contain the answer, say so instead of inventing information.',
-                'You may explain a concept in simpler words, but distinguish explanations from facts explicitly stated in the notes.',
+                'You are NeuroLearn, an educational research and learning assistant.',
+                'Answer the learner using the supplied lecture notes and, when useful, current online sources retrieved through Google Search.',
+                'Use online research to supplement the notes, clarify concepts, check claims, and find relevant educational explanations.',
+                'Compare the notes with online findings when relevant. Explain important disagreements instead of hiding them.',
+                'Prioritize authoritative educational institutions, official documentation, research publications, and other reputable sources.',
+                'Do not invent sources, URLs, quotations, dates, or facts.',
+                'Distinguish information from the uploaded notes from additional information found online.',
+                'If the notes do not contain the answer, use online research when available.',
+                'If the online search provides insufficient evidence, state that limitation clearly.',
+                'Do not claim that you searched online unless search grounding metadata is returned.',
                 '',
-                'LECTURE NOTES:',
+                'FORMATTING INSTRUCTIONS:',
+                'Write a well-structured Markdown answer.',
+                'Use a short heading when useful, followed by clear paragraphs.',
+                'Use bullet points for lists and numbered lists for procedures.',
+                'Use **bold** for important terms and definitions.',
+                'Use fenced code blocks for programming examples.',
+                'Keep the explanation understandable to a student.',
+                'Avoid unnecessarily long introductions and repeated conclusions.',
+                '',
+                `SELECTED DOCUMENT: ${document.filename}`,
+                '',
+                'UPLOADED LECTURE NOTES:',
                 text,
                 '',
                 'LEARNER QUESTION:',
                 message
-            ].join('\n')
+            ].join('\n'),
+            config: {
+                tools: [
+                    {
+                        googleSearch: {}
+                    }
+                ]
+            }
         });
 
-        if (!response.text || !response.text.trim()) {
+        const answer = response.text?.trim();
+
+        if (!answer) {
             throw new Error('The AI returned an empty answer.');
         }
 
+        const { sources, searchPerformed } = getWebSources(response);
+
         return res.json({
             documentId,
-            answer: response.text.trim()
+            answer,
+            sources,
+            searchPerformed
         });
     } catch (error) {
         return handleAIError(res, error, 'Answer question');
     }
 });
 
-// Generate a multiple-choice quiz.
+// Generate a multiple-choice quiz from lecture notes.
 router.post('/quiz', async (req, res) => {
     try {
         const documentId = Number(req.body.documentId);
@@ -235,8 +303,7 @@ router.post('/quiz', async (req, res) => {
                 'Each question must have exactly four distinct options.',
                 'Each question must have exactly one correct answer.',
                 'The correctAnswer must exactly match one of the four options.',
-                'Make questions clear and relevant to the notes.',
-                'Do not invent facts that are not supported by the notes.',
+                'Do not invent unsupported facts.',
                 '',
                 'LECTURE NOTES:',
                 text
@@ -246,7 +313,7 @@ router.post('/quiz', async (req, res) => {
             }
         });
 
-        if (!response.text || !response.text.trim()) {
+        if (!response.text?.trim()) {
             throw new Error('The AI returned an empty quiz.');
         }
 
