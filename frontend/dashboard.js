@@ -43,3 +43,4 @@ if (studyWorkspaceButton) {
         window.location.href = 'study.html';
     });
 }
+

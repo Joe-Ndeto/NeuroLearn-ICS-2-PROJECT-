@@ -1,99 +1,82 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login / Sign Up - NeuroLearn</title>
     <link rel="stylesheet" href="login_signup.css">
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="login_signup.js" defer></script>
 </head>
-<body>
 
+<body>
     <div class="container">
         <div class="tabs">
             <div class="tab active" onclick="switchTab('login')">Login</div>
             <div class="tab" onclick="switchTab('signup')">Sign Up</div>
         </div>
 
-        <!-- Login Form -->
         <form id="login-form" class="form-box active">
             <div class="form-group">
                 <label for="login-email">Email Address</label>
-                <input
-                    id="login-email"
-                    type="email"
-                    required
-                    placeholder="test@example.com"
-                >
+                <input id="login-email" type="email" required placeholder="test@example.com">
             </div>
 
             <div class="form-group">
                 <label for="login-password">Password</label>
-                <input
-                    id="login-password"
-                    type="password"
-                    required
-                    placeholder="Enter your password"
-                >
+                <input id="login-password" type="password" required placeholder="Enter your password">
             </div>
 
             <button type="submit" class="btn-submit">
                 Login to NeuroLearn
             </button>
+
+            <p style="text-align:center; margin:18px 0 10px;">
+                Or continue with
+            </p>
+
+            <div id="google-signin-button" style="display:flex; justify-content:center; margin-bottom:12px;">
+            </div>
         </form>
 
-        <!-- Sign Up Form -->
         <form id="signup-form" class="form-box">
             <div class="form-group">
                 <label for="signup-username">Full Name / Username</label>
-                <input
-                    id="signup-username"
-                    type="text"
-                    maxlength="100"
-                    required
-                    placeholder="Enter your name"
-                >
+                <input id="signup-username" type="text" maxlength="100" required placeholder="Enter your name">
             </div>
 
             <div class="form-group">
                 <label for="signup-email">Email Address</label>
-                <input
-                    id="signup-email"
-                    type="email"
-                    required
-                    placeholder="test@example.com"
-                >
+                <input id="signup-email" type="email" required placeholder="test@example.com">
             </div>
 
             <div class="form-group">
                 <label for="signup-password">Password</label>
-                <input
-                    id="signup-password"
-                    type="password"
-                    minlength="8"
-                    required
-                    placeholder="At least 8 characters"
-                >
+                <input id="signup-password" type="password" minlength="8" required placeholder="At least 8 characters">
             </div>
 
             <div class="form-group">
                 <label for="signup-confirm-password">Confirm Password</label>
-                <input
-                    id="signup-confirm-password"
-                    type="password"
-                    minlength="8"
-                    required
-                    placeholder="Confirm your password"
-                >
+                <input id="signup-confirm-password" type="password" minlength="8" required
+                    placeholder="Confirm your password">
             </div>
 
             <button type="submit" class="btn-submit">
                 Create Account
             </button>
+
+            <p style="text-align:center; margin:18px 0 10px;">
+                Or sign up with
+            </p>
+
+            <div id="google-signup-button" style="display:flex; justify-content:center; margin-bottom:12px;">
+            </div>
+
         </form>
 
         <p id="auth-message" role="status" aria-live="polite"></p>
     </div>
-
 </body>
+
 </html>

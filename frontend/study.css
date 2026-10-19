@@ -607,3 +607,51 @@ h2 {
         min-height: 350px;
     }
 }
+
+.study-panel {
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.study-tabs {
+    flex-shrink: 0;
+}
+
+.tab-content {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 10px;
+    scrollbar-width: thin;
+    scrollbar-color: #b8b8b8 transparent;
+}
+
+.tab-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.tab-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.tab-content::-webkit-scrollbar-thumb {
+    background: #b8b8b8;
+    border-radius: 10px;
+}
+
+.tab-content::-webkit-scrollbar-thumb:hover {
+    background: #888;
+}
+
+#summary-result,
+#quiz-result {
+    overflow-wrap: anywhere;
+    line-height: 1.7;
+}
+
+.tab-content[hidden] {
+    display: none !important;
+}
