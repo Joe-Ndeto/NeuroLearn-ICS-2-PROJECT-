@@ -20,7 +20,7 @@ const processedFolder = path.resolve(
     'processed'
 );
 
-// Retrieve extracted text using the unique stored upload filename.
+// Read the extracted text for a document.
 async function getProcessedText(documentId) {
     if (!Number.isInteger(documentId) || documentId < 1) {
         const error = new Error('A valid document ID is required.');
@@ -28,28 +28,24 @@ async function getProcessedText(documentId) {
         throw error;
     }
 
-    const [documents] = await mysql.execute(
-        `SELECT
-            document_id,
-            filename,
-            file_path,
-            processing_status
+    const [rows] = await mysql.execute(
+        `SELECT document_id, filename, file_path, processing_status
          FROM uploaded_document
          WHERE document_id = ?`,
         [documentId]
     );
 
-    if (documents.length === 0) {
+    if (!rows.length) {
         const error = new Error('Document not found.');
         error.status = 404;
         throw error;
     }
 
-    const document = documents[0];
+    const document = rows[0];
 
     if (document.processing_status !== 'processed') {
         const error = new Error(
-            'This document has not been processed successfully.'
+            'This document has not finished processing.'
         );
         error.status = 409;
         throw error;
@@ -57,21 +53,18 @@ async function getProcessedText(documentId) {
 
     if (!document.file_path) {
         const error = new Error(
-            'The stored upload path is missing for this document.'
+            'The document does not have a stored file path.'
         );
         error.status = 422;
         throw error;
     }
 
-    // Example stored path:
-    // storage/uploads/1791803589374-Lecture 8 Cloud Auditing.pdf
     const storedUploadName = path.basename(document.file_path);
     const storedStem = path.parse(storedUploadName).name;
     const textFilename = `${storedStem}.txt`;
-
     const textPath = path.resolve(processedFolder, textFilename);
 
-    // Prevent reading files outside the processed folder.
+    // Prevent paths outside the processed folder.
     if (path.dirname(textPath) !== processedFolder) {
         const error = new Error('Invalid processed document path.');
         error.status = 400;
@@ -85,8 +78,7 @@ async function getProcessedText(documentId) {
     } catch (readError) {
         if (readError.code === 'ENOENT') {
             const error = new Error(
-                `Extracted text file not found: ${textFilename}. ` +
-                'The document may need to be processed again.'
+                'The extracted text file could not be found. Please upload the document again.'
             );
             error.status = 404;
             throw error;
@@ -95,29 +87,48 @@ async function getProcessedText(documentId) {
         throw readError;
     }
 
-    if (!text.trim()) {
-        const error = new Error('The extracted document text is empty.');
+    text = text.trim();
+
+    if (!text) {
+        const error = new Error(
+            'The document contains no extracted text to study.'
+        );
         error.status = 422;
         throw error;
     }
 
     if (text.length > 30000) {
         const error = new Error(
-            'This document exceeds the current 30,000-character limit. ' +
-            'Please use shorter notes for now.'
+            'This document is too long for the current AI processing limit.'
         );
         error.status = 413;
         throw error;
     }
 
-    return text;
+    return {
+        document,
+        text
+    };
+}
+
+// Shared error response.
+function handleAIError(res, error, action) {
+    console.error(`${action} failed:`, error);
+
+    const status = error.status || 502;
+
+    return res.status(status).json({
+        error: error.status
+            ? error.message
+            : `Gemini could not ${action.toLowerCase()}. Check the backend terminal for details.`
+    });
 }
 
 // Generate a summary.
 router.post('/summarize', async (req, res) => {
     try {
         const documentId = Number(req.body.documentId);
-        const text = await getProcessedText(documentId);
+        const { text } = await getProcessedText(documentId);
 
         const response = await ai.models.generateContent({
             model: MODEL,
@@ -132,24 +143,66 @@ router.post('/summarize', async (req, res) => {
             ].join('\n')
         });
 
-        if (!response.text) {
-            throw new Error('Gemini returned an empty summary.');
+        if (!response.text || !response.text.trim()) {
+            throw new Error('The AI returned an empty summary.');
         }
 
         return res.json({
             documentId,
-            summary: response.text
+            summary: response.text.trim()
         });
     } catch (error) {
-        console.error('Summary error:', error.message);
+        return handleAIError(res, error, 'Generate summary');
+    }
+});
 
-        const status = error.status || 502;
+// Answer questions using the selected document.
+router.post('/chat', async (req, res) => {
+    try {
+        const documentId = Number(req.body.documentId);
+        const message = String(req.body.message || '').trim();
 
-        return res.status(status).json({
-            error: error.status
-                ? error.message
-                : 'Gemini could not generate the summary. Check the backend terminal for the API error.'
+        if (!message) {
+            return res.status(400).json({
+                error: 'Please enter a question.'
+            });
+        }
+
+        if (message.length > 2000) {
+            return res.status(400).json({
+                error: 'Your question must not exceed 2,000 characters.'
+            });
+        }
+
+        const { text } = await getProcessedText(documentId);
+
+        const response = await ai.models.generateContent({
+            model: MODEL,
+            contents: [
+                'You are NeuroLearn, a helpful educational study assistant.',
+                'Answer the learner using the supplied lecture notes as your primary source.',
+                'Explain concepts clearly and at an appropriate student level.',
+                'If the notes do not contain the answer, say so instead of inventing information.',
+                'You may explain a concept in simpler words, but distinguish explanations from facts explicitly stated in the notes.',
+                '',
+                'LECTURE NOTES:',
+                text,
+                '',
+                'LEARNER QUESTION:',
+                message
+            ].join('\n')
         });
+
+        if (!response.text || !response.text.trim()) {
+            throw new Error('The AI returned an empty answer.');
+        }
+
+        return res.json({
+            documentId,
+            answer: response.text.trim()
+        });
+    } catch (error) {
+        return handleAIError(res, error, 'Answer question');
     }
 });
 
@@ -165,21 +218,25 @@ router.post('/quiz', async (req, res) => {
             questionCount > 10
         ) {
             return res.status(400).json({
-                error: 'Choose between 1 and 10 questions.'
+                error: 'Question count must be between 1 and 10.'
             });
         }
 
-        const text = await getProcessedText(documentId);
+        const { text } = await getProcessedText(documentId);
 
         const response = await ai.models.generateContent({
             model: MODEL,
             contents: [
-                'Create a multiple-choice quiz using only these notes.',
+                'Create a multiple-choice revision quiz using only the lecture notes below.',
                 `Generate exactly ${questionCount} questions.`,
-                'Return valid JSON only in this structure:',
-                '{"questions":[{"question":"...","options":["A","B","C","D"],"correctAnswer":"exact option text","explanation":"..."}]}',
-                'Each question must have four options and one correct answer.',
-                'Do not invent information outside the notes.',
+                'Return valid JSON only, without Markdown code fences.',
+                'Use this exact structure:',
+                '{"questions":[{"question":"Question text","options":["Option A","Option B","Option C","Option D"],"correctAnswer":"Exact option text","explanation":"Brief explanation based on the notes"}]}',
+                'Each question must have exactly four distinct options.',
+                'Each question must have exactly one correct answer.',
+                'The correctAnswer must exactly match one of the four options.',
+                'Make questions clear and relevant to the notes.',
+                'Do not invent facts that are not supported by the notes.',
                 '',
                 'LECTURE NOTES:',
                 text
@@ -189,40 +246,54 @@ router.post('/quiz', async (req, res) => {
             }
         });
 
-        if (!response.text) {
-            throw new Error('Gemini returned an empty quiz.');
+        if (!response.text || !response.text.trim()) {
+            throw new Error('The AI returned an empty quiz.');
         }
 
-        const quiz = JSON.parse(response.text);
+        let quiz;
+
+        try {
+            quiz = JSON.parse(response.text);
+        } catch {
+            throw new Error('The AI returned invalid quiz JSON.');
+        }
 
         if (
+            !quiz ||
             !Array.isArray(quiz.questions) ||
-            quiz.questions.length !== questionCount ||
-            quiz.questions.some(question =>
+            quiz.questions.length !== questionCount
+        ) {
+            throw new Error(
+                'The generated quiz did not contain the requested number of questions.'
+            );
+        }
+
+        for (const question of quiz.questions) {
+            if (
                 typeof question.question !== 'string' ||
+                !question.question.trim() ||
                 !Array.isArray(question.options) ||
                 question.options.length !== 4 ||
+                question.options.some(
+                    option => typeof option !== 'string' || !option.trim()
+                ) ||
+                new Set(question.options).size !== 4 ||
+                typeof question.correctAnswer !== 'string' ||
                 !question.options.includes(question.correctAnswer) ||
                 typeof question.explanation !== 'string'
-            )
-        ) {
-            throw new Error('Gemini returned an invalid quiz structure.');
+            ) {
+                throw new Error(
+                    'The generated quiz contains an invalid question.'
+                );
+            }
         }
 
         return res.json({
             documentId,
-            ...quiz
+            questions: quiz.questions
         });
     } catch (error) {
-        console.error('Quiz error:', error.message);
-
-        const status = error.status || 502;
-
-        return res.status(status).json({
-            error: error.status
-                ? error.message
-                : 'Gemini could not generate the quiz. Check the backend terminal for the API error.'
-        });
+        return handleAIError(res, error, 'Generate quiz');
     }
 });
 
