@@ -1,4 +1,3 @@
-
 const API_BASE_URL = 'http://localhost:5000/api';
 
 const storedLearner = sessionStorage.getItem('neurolearnLearner');
@@ -382,7 +381,6 @@ async function generateDocumentSummary() {
         }
 
         if (summaryResult) {
-            // textContent prevents generated text from being treated as HTML.
             summaryResult.textContent = data.summary;
         }
 

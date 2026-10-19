@@ -9,7 +9,6 @@ const googleClient = new OAuth2Client(
     process.env.GOOGLE_CLIENT_ID
 );
 
-// Register with email and password
 router.post('/signup', async (req, res) => {
     const { username, email, password } = req.body;
 
@@ -26,11 +25,13 @@ router.post('/signup', async (req, res) => {
     }
 
     try {
-        const cleanUsername = username.trim();
+        const cleanUsername = username.trim().replace(/\s+/g, ' ');
         const cleanEmail = email.trim().toLowerCase();
 
         const [existing] = await pool.execute(
-            'SELECT learner_id FROM learner WHERE email = ? OR username = ?',
+            `SELECT learner_id
+             FROM learner
+             WHERE email = ? OR username = ?`,
             [cleanEmail, cleanUsername]
         );
 
@@ -58,13 +59,13 @@ router.post('/signup', async (req, res) => {
         });
     } catch (error) {
         console.error('Signup error:', error);
+
         return res.status(500).json({
             error: 'Registration failed. Please try again.'
         });
     }
 });
 
-// Sign in with email and password
 router.post('/login', async (req, res) => {
     const { email, password } = req.body;
 
@@ -82,13 +83,17 @@ router.post('/login', async (req, res) => {
             [email.trim().toLowerCase()]
         );
 
-        if (learners.length === 0 || !learners[0].password_hash) {
+        if (
+            learners.length === 0 ||
+            !learners[0].password_hash
+        ) {
             return res.status(401).json({
                 error: 'Invalid email or password.'
             });
         }
 
         const learner = learners[0];
+
         const passwordMatches = await bcrypt.compare(
             password,
             learner.password_hash
@@ -110,13 +115,14 @@ router.post('/login', async (req, res) => {
         });
     } catch (error) {
         console.error('Login error:', error);
+
         return res.status(500).json({
             error: 'Login failed. Please try again.'
         });
     }
 });
 
-// Sign in with Google
+// Sign in or register with Google.
 router.post('/google', async (req, res) => {
     const { credential } = req.body;
 
@@ -128,6 +134,7 @@ router.post('/google', async (req, res) => {
 
     if (!process.env.GOOGLE_CLIENT_ID) {
         console.error('GOOGLE_CLIENT_ID is missing.');
+
         return res.status(500).json({
             error: 'Google sign-in is not configured.'
         });
@@ -155,7 +162,7 @@ router.post('/google', async (req, res) => {
         const googleId = payload.sub;
         const email = payload.email.trim().toLowerCase();
 
-        // Return the learner if this Google account is already linked.
+        // Find an existing account linked to this Google ID.
         const [linked] = await pool.execute(
             `SELECT learner_id, username, email
              FROM learner
@@ -164,13 +171,28 @@ router.post('/google', async (req, res) => {
         );
 
         if (linked.length > 0) {
+            const learner = linked[0];
+
+            // Update the saved name when Google supplies one.
+            if (payload.name && payload.name.trim()) {
+                await pool.execute(
+                    `UPDATE learner
+                     SET username = ?
+                     WHERE learner_id = ?`,
+                    [googleName, learner.learner_id]
+                );
+            }
+
             return res.status(200).json({
                 message: 'Google sign-in successful.',
-                learner: linked[0]
+                learner: {
+                    learner_id: learner.learner_id,
+                    username: googleName,
+                    email: learner.email
+                }
             });
         }
 
-        // Do not silently link an existing password account.
         const [existingEmail] = await pool.execute(
             `SELECT learner_id
              FROM learner
@@ -185,12 +207,12 @@ router.post('/google', async (req, res) => {
             });
         }
 
-        // Create a unique username from the Google email.
+        // Generate a unique username based on Google's profile name.
         const baseUsername = (
-            (payload.name || email.split('@')[0])
-                .toLowerCase()
-                .replace(/[^a-z0-9_]/g, '')
-                .slice(0, 80) || 'learner'
+            googleName
+                .replace(/[^a-zA-Z0-9_ ]/g, '')
+                .slice(0, 80)
+                .trim() || 'Learner'
         );
 
         let username = baseUsername;
@@ -198,13 +220,20 @@ router.post('/google', async (req, res) => {
 
         while (true) {
             const [matches] = await pool.execute(
-                'SELECT learner_id FROM learner WHERE username = ?',
+                `SELECT learner_id
+                 FROM learner
+                 WHERE username = ?`,
                 [username]
             );
 
-            if (matches.length === 0) break;
+            if (matches.length === 0) {
+                break;
+            }
 
-            username = `${baseUsername}_${suffix++}`;
+            const suffixText = `_${suffix++}`;
+            username =
+                baseUsername.slice(0, 80 - suffixText.length) +
+                suffixText;
         }
 
         const [result] = await pool.execute(
@@ -218,7 +247,7 @@ router.post('/google', async (req, res) => {
             message: 'Google account registered successfully.',
             learner: {
                 learner_id: result.insertId,
-                username,
+                username: googleName,
                 email
             }
         });

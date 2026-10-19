@@ -1,4 +1,8 @@
+
 const API_URL = 'http://localhost:5000/api/auth';
+
+const GOOGLE_CLIENT_ID =
+    '1019813293146-pfonkrpk5n4jh7r8hhd44as5iend60bu.apps.googleusercontent.com';
 
 function switchTab(tabName) {
     document.querySelectorAll('.tab').forEach(tab => {
@@ -21,9 +25,21 @@ function switchTab(tabName) {
     document.getElementById('auth-message').textContent = '';
 }
 
+function completeLogin(learner) {
+    sessionStorage.setItem(
+        'neurolearnLearner',
+        JSON.stringify(learner)
+    );
+
+    window.location.href = new URL(
+        'dashboard.html',
+        window.location.href
+    ).href;
+}
+
+// Handle email/password authentication
 async function sendAuthRequest(endpoint, data) {
     const message = document.getElementById('auth-message');
-
     message.textContent = 'Please wait...';
 
     try {
@@ -45,22 +61,16 @@ async function sendAuthRequest(endpoint, data) {
 
         if (endpoint === 'signup') {
             document.getElementById('signup-form').reset();
+
             switchTab('login');
 
             message.textContent =
                 'Account created successfully! Please log in.';
+
             return;
         }
 
-        sessionStorage.setItem(
-            'neurolearnLearner',
-            JSON.stringify(result.learner)
-        );
-
-        window.location.href = new URL(
-            'dashboard.html',
-            window.location.href
-        ).href;
+        completeLogin(result.learner);
 
     } catch (error) {
         message.textContent = error.message;
@@ -68,6 +78,107 @@ async function sendAuthRequest(endpoint, data) {
     }
 }
 
+// Handle Google authentication for BOTH buttons
+window.handleGoogleCredentialResponse = async function (response) {
+    const message = document.getElementById('auth-message');
+
+    if (!response || !response.credential) {
+        message.textContent =
+            'Google did not return a sign-in credential.';
+        return;
+    }
+
+    message.textContent = 'Signing in with Google...';
+
+    try {
+        const result = await sendGoogleRequest(response.credential);
+
+        // The backend creates a new account if needed,
+        // or returns the existing Google-linked learner.
+        completeLogin(result.learner);
+
+    } catch (error) {
+        message.textContent = error.message;
+        console.error('Google authentication error:', error);
+    }
+};
+
+// Send Google's verified credential to the backend
+async function sendGoogleRequest(credential) {
+    const response = await fetch(`${API_URL}/google`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ credential })
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+        throw new Error(
+            result.error || 'Google authentication failed.'
+        );
+    }
+
+    return result;
+}
+
+// Render separate Google buttons for Login and Sign Up
+function initializeGoogleSignIn() {
+    if (!window.google?.accounts?.id) {
+        console.error(
+            'Google Identity Services has not loaded. Check your internet connection.'
+        );
+        return;
+    }
+
+    const loginButton = document.getElementById(
+        'google-signin-button'
+    );
+
+    const signupButton = document.getElementById(
+        'google-signup-button'
+    );
+
+    if (!loginButton && !signupButton) {
+        console.error('No Google button containers were found.');
+        return;
+    }
+
+    window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: window.handleGoogleCredentialResponse
+    });
+
+    const buttonOptions = {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        shape: 'rectangular',
+        width: 280
+    };
+
+    // Google button on Login tab
+    if (loginButton) {
+        window.google.accounts.id.renderButton(loginButton, {
+            ...buttonOptions,
+            text: 'continue_with'
+        });
+    }
+
+    // Google button on Sign Up tab
+    if (signupButton) {
+        window.google.accounts.id.renderButton(signupButton, {
+            ...buttonOptions,
+            text: 'signup_with'
+        });
+    }
+}
+
+window.addEventListener('load', initializeGoogleSignIn);
+
+// Email/password sign-up
 document.getElementById('signup-form').addEventListener(
     'submit',
     async function (event) {
@@ -103,6 +214,7 @@ document.getElementById('signup-form').addEventListener(
     }
 );
 
+// Email/password login
 document.getElementById('login-form').addEventListener(
     'submit',
     async function (event) {
