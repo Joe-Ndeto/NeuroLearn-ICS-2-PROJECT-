@@ -24,7 +24,6 @@ if (!storedLearner) {
     }
 }
 
-// Log out the current learner.
 const logoutButton = document.getElementById('logout-button');
 
 if (logoutButton) {
