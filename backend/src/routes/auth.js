@@ -5,10 +5,20 @@ const bcrypt = require('bcryptjs');
 const { OAuth2Client } = require('google-auth-library');
 const pool = require('../config/mysql');
 
+// Format names supplied by Google.
+function formatName(name) {
+    return String(name || '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .toLowerCase()
+        .replace(/\b[a-z]/g, letter => letter.toUpperCase());
+}
+
 const googleClient = new OAuth2Client(
     process.env.GOOGLE_CLIENT_ID
 );
 
+// Register using email and password.
 router.post('/signup', async (req, res) => {
     const { username, email, password } = req.body;
 
@@ -27,6 +37,12 @@ router.post('/signup', async (req, res) => {
     try {
         const cleanUsername = username.trim().replace(/\s+/g, ' ');
         const cleanEmail = email.trim().toLowerCase();
+
+        if (!cleanUsername) {
+            return res.status(400).json({
+                error: 'Username is required.'
+            });
+        }
 
         const [existing] = await pool.execute(
             `SELECT learner_id
@@ -66,6 +82,7 @@ router.post('/signup', async (req, res) => {
     }
 });
 
+// Log in using email and password.
 router.post('/login', async (req, res) => {
     const { email, password } = req.body;
 
@@ -141,6 +158,7 @@ router.post('/google', async (req, res) => {
     }
 
     try {
+        // Verify the Google ID token.
         const ticket = await googleClient.verifyIdToken({
             idToken: credential,
             audience: process.env.GOOGLE_CLIENT_ID
@@ -162,7 +180,11 @@ router.post('/google', async (req, res) => {
         const googleId = payload.sub;
         const email = payload.email.trim().toLowerCase();
 
-        // Find an existing account linked to this Google ID.
+        const googleName = formatName(
+            payload.name || email.split('@')[0] || 'Learner'
+        );
+
+        // Check whether this Google account is already linked.
         const [linked] = await pool.execute(
             `SELECT learner_id, username, email
              FROM learner
@@ -173,26 +195,40 @@ router.post('/google', async (req, res) => {
         if (linked.length > 0) {
             const learner = linked[0];
 
-            // Update the saved name when Google supplies one.
+            // Update the username if Google supplies a profile name.
             if (payload.name && payload.name.trim()) {
-                await pool.execute(
-                    `UPDATE learner
-                     SET username = ?
-                     WHERE learner_id = ?`,
+                // Check whether another learner already uses this name.
+                const [nameMatches] = await pool.execute(
+                    `SELECT learner_id
+                     FROM learner
+                     WHERE username = ?
+                       AND learner_id <> ?`,
                     [googleName, learner.learner_id]
                 );
+
+                if (nameMatches.length === 0) {
+                    await pool.execute(
+                        `UPDATE learner
+                         SET username = ?
+                         WHERE learner_id = ?`,
+                        [googleName, learner.learner_id]
+                    );
+
+                    learner.username = googleName;
+                }
             }
 
             return res.status(200).json({
                 message: 'Google sign-in successful.',
                 learner: {
                     learner_id: learner.learner_id,
-                    username: googleName,
+                    username: learner.username,
                     email: learner.email
                 }
             });
         }
 
+        // Prevent automatic linking to an existing password account.
         const [existingEmail] = await pool.execute(
             `SELECT learner_id
              FROM learner
@@ -231,11 +267,13 @@ router.post('/google', async (req, res) => {
             }
 
             const suffixText = `_${suffix++}`;
+
             username =
                 baseUsername.slice(0, 80 - suffixText.length) +
                 suffixText;
         }
 
+        // Create the new Google learner.
         const [result] = await pool.execute(
             `INSERT INTO learner
                 (username, email, password_hash, google_id)
@@ -247,14 +285,14 @@ router.post('/google', async (req, res) => {
             message: 'Google account registered successfully.',
             learner: {
                 learner_id: result.insertId,
-                username: googleName,
+                username,
                 email
             }
         });
     } catch (error) {
         console.error('Google sign-in error:', error);
 
-        return res.status(401).json({
+        return res.status(500).json({
             error: 'Google sign-in failed. Please try again.'
         });
     }
