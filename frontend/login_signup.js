@@ -2,7 +2,7 @@
 const API_URL = 'http://localhost:5000/api/auth';
 
 const GOOGLE_CLIENT_ID =
-    '1019813293146-pfonkrpk5n4jh7r8hhd44as5iend60bu.apps.googleusercontent.com';
+    '1019813293146-e10qgtk8iubmr79gamtq773acu37hie4.apps.googleusercontent.com';
 
 function switchTab(tabName) {
     document.querySelectorAll('.tab').forEach(tab => {
@@ -25,10 +25,22 @@ function switchTab(tabName) {
     document.getElementById('auth-message').textContent = '';
 }
 
-function completeLogin(learner) {
+// Store learner information and JWT after successful authentication.
+function completeLogin(learner, token) {
+    if (!learner || !token) {
+        throw new Error(
+            'Login response is missing learner information or authentication token.'
+        );
+    }
+
     sessionStorage.setItem(
         'neurolearnLearner',
         JSON.stringify(learner)
+    );
+
+    sessionStorage.setItem(
+        'neurolearnToken',
+        token
     );
 
     window.location.href = new URL(
@@ -37,7 +49,7 @@ function completeLogin(learner) {
     ).href;
 }
 
-// Handle email/password authentication
+// Handle email/password authentication.
 async function sendAuthRequest(endpoint, data) {
     const message = document.getElementById('auth-message');
     message.textContent = 'Please wait...';
@@ -70,7 +82,7 @@ async function sendAuthRequest(endpoint, data) {
             return;
         }
 
-        completeLogin(result.learner);
+        completeLogin(result.learner, result.token);
 
     } catch (error) {
         message.textContent = error.message;
@@ -78,7 +90,7 @@ async function sendAuthRequest(endpoint, data) {
     }
 }
 
-// Handle Google authentication for BOTH buttons
+// Handle Google authentication for BOTH buttons.
 window.handleGoogleCredentialResponse = async function (response) {
     const message = document.getElementById('auth-message');
 
@@ -93,9 +105,7 @@ window.handleGoogleCredentialResponse = async function (response) {
     try {
         const result = await sendGoogleRequest(response.credential);
 
-        // The backend creates a new account if needed,
-        // or returns the existing Google-linked learner.
-        completeLogin(result.learner);
+        completeLogin(result.learner, result.token);
 
     } catch (error) {
         message.textContent = error.message;
@@ -103,7 +113,7 @@ window.handleGoogleCredentialResponse = async function (response) {
     }
 };
 
-// Send Google's verified credential to the backend
+// Send Google's verified credential to the backend.
 async function sendGoogleRequest(credential) {
     const response = await fetch(`${API_URL}/google`, {
         method: 'POST',
@@ -124,7 +134,7 @@ async function sendGoogleRequest(credential) {
     return result;
 }
 
-// Render separate Google buttons for Login and Sign Up
+// Render separate Google buttons for Login and Sign Up.
 function initializeGoogleSignIn() {
     if (!window.google?.accounts?.id) {
         console.error(
@@ -159,7 +169,7 @@ function initializeGoogleSignIn() {
         width: 280
     };
 
-    // Google button on Login tab
+    // Google button on Login tab.
     if (loginButton) {
         window.google.accounts.id.renderButton(loginButton, {
             ...buttonOptions,
@@ -167,7 +177,7 @@ function initializeGoogleSignIn() {
         });
     }
 
-    // Google button on Sign Up tab
+    // Google button on Sign Up tab.
     if (signupButton) {
         window.google.accounts.id.renderButton(signupButton, {
             ...buttonOptions,
@@ -178,7 +188,7 @@ function initializeGoogleSignIn() {
 
 window.addEventListener('load', initializeGoogleSignIn);
 
-// Email/password sign-up
+// Email/password sign-up.
 document.getElementById('signup-form').addEventListener(
     'submit',
     async function (event) {
@@ -214,7 +224,7 @@ document.getElementById('signup-form').addEventListener(
     }
 );
 
-// Email/password login
+// Email/password login.
 document.getElementById('login-form').addEventListener(
     'submit',
     async function (event) {

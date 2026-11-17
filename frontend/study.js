@@ -1,94 +1,110 @@
+
+'use strict';
+
 const API_BASE_URL = 'http://localhost:5000/api';
 
 const storedLearner = sessionStorage.getItem('neurolearnLearner');
+const storedToken = sessionStorage.getItem('neurolearnToken');
 
 let learner = null;
 let documents = [];
 let selectedDocumentId = null;
-
 let isUploading = false;
 let isGeneratingSummary = false;
 let isSendingMessage = false;
 let isGeneratingQuiz = false;
 
-// Authentication
-if (!storedLearner) {
+// Send the JWT with every protected API request.
+async function authenticatedFetch(url, options = {}) {
+    const token = sessionStorage.getItem('neurolearnToken');
+
+    if (!token) {
+        sessionStorage.removeItem('neurolearnLearner');
+        sessionStorage.removeItem('neurolearnToken');
+        window.location.replace('login_signup.html');
+        throw new Error('Your session has expired. Please sign in again.');
+    }
+
+    const headers = new Headers(options.headers || {});
+    headers.set('Authorization', `Bearer ${token}`);
+
+    const response = await fetch(url, {
+        ...options,
+        headers
+    });
+
+    if (response.status === 401) {
+        sessionStorage.removeItem('neurolearnLearner');
+        sessionStorage.removeItem('neurolearnToken');
+        window.location.replace('login_signup.html');
+    }
+
+    return response;
+}
+
+if (!storedLearner || !storedToken) {
     window.location.replace('login_signup.html');
 } else {
     try {
         learner = JSON.parse(storedLearner);
 
-        if (!learner) {
-            throw new Error('Learner information is missing.');
+        if (
+            !learner ||
+            !Number.isInteger(Number(learner.learner_id))
+        ) {
+            throw new Error('Learner information is missing or invalid.');
         }
     } catch (error) {
         console.error('Could not load learner information:', error);
         sessionStorage.removeItem('neurolearnLearner');
+        sessionStorage.removeItem('neurolearnToken');
         window.location.replace('login_signup.html');
     }
 }
 
-// Learner and navigation
-const learnerName = document.getElementById('learner-name');
-const logoutButton = document.getElementById('logout-button');
+const $ = id => document.getElementById(id);
 
-// Document upload and list
-const fileInput = document.getElementById('document-file');
-const uploadButton = document.getElementById('upload-document');
-const refreshButton = document.getElementById('refresh-documents');
-const searchInput = document.getElementById('document-search');
-const documentList = document.getElementById('document-list');
-const documentStatus = document.getElementById('document-status');
+const learnerName = $('learner-name');
+const logoutButton = $('logout-button');
+const fileInput = $('document-file');
+const uploadButton = $('upload-document');
+const refreshButton = $('refresh-documents');
+const searchInput = $('document-search');
+const documentList = $('document-list');
+const documentStatus = $('document-status');
+const selectedDocumentName = $('selected-document-name');
+const selectedDocumentStatus = $('selected-document-status');
+const summaryButton = $('summary-button');
+const panelSummaryButton = $('panel-summary-button');
+const summaryResult = $('summary-result');
+const chatForm = $('chat-form');
+const chatInput = $('chat-input');
+const chatMessages = $('chat-messages');
+const sendButton = $('send-button');
+const openQuizButton = $('open-quiz-button');
+const generateQuizButton = $('generate-quiz-button');
+const questionCountInput = $('question-count');
+const quizResult = $('quiz-result');
 
-// Selected document information
-const selectedDocumentName = document.getElementById(
-    'selected-document-name'
-);
-const selectedDocumentStatus = document.getElementById(
-    'selected-document-status'
-);
-
-// Summary controls
-const summaryButton = document.getElementById('summary-button');
-const panelSummaryButton = document.getElementById(
-    'panel-summary-button'
-);
-const summaryResult = document.getElementById('summary-result');
-
-// Chat controls
-const chatForm = document.getElementById('chat-form');
-const chatInput = document.getElementById('chat-input');
-const chatMessages = document.getElementById('chat-messages');
-const sendButton = document.getElementById('send-button');
-const openQuizButton = document.getElementById('open-quiz-button');
-
-// Quiz controls
-const generateQuizButton = document.getElementById('generate-quiz-button');
-const questionCountInput = document.getElementById('question-count');
-const quizResult = document.getElementById('quiz-result');
-
-// Display learner name
 if (learnerName && learner) {
     learnerName.textContent =
         learner.username || learner.name || 'Learner';
 }
 
-// Logout
 if (logoutButton) {
     logoutButton.addEventListener('click', () => {
         sessionStorage.removeItem('neurolearnLearner');
+        sessionStorage.removeItem('neurolearnToken');
         window.location.replace('login_signup.html');
     });
 }
 
-// Display document status messages
 function setDocumentStatus(message) {
     if (documentStatus) {
         documentStatus.textContent = message;
     }
 }
 
-// Parse API responses and handle server errors
 async function readResponse(response) {
     let data;
 
@@ -102,8 +118,8 @@ async function readResponse(response) {
 
     if (!response.ok) {
         throw new Error(
-            data.message ||
             data.error ||
+            data.message ||
             `Request failed with status ${response.status}.`
         );
     }
@@ -111,7 +127,6 @@ async function readResponse(response) {
     return data;
 }
 
-// Standardize document objects received from the API
 function normalizeDocument(item) {
     return {
         ...item,
@@ -121,22 +136,17 @@ function normalizeDocument(item) {
             item.file_type || item.type || 'file'
         ).toUpperCase(),
         processing_status: String(
-            item.processing_status ||
-            item.processingStatus ||
-            'unknown'
+            item.processing_status || item.processingStatus || 'unknown'
         ).toLowerCase()
     };
 }
 
-// Get the currently selected document
 function getSelectedDocument() {
     return documents.find(
-        item =>
-            String(item.document_id) === String(selectedDocumentId)
+        item => String(item.document_id) === String(selectedDocumentId)
     );
 }
 
-// Ensure a processed document has been selected
 function requireSelectedDocument() {
     if (!selectedDocumentId) {
         setDocumentStatus('Please select a document first.');
@@ -162,34 +172,30 @@ function requireSelectedDocument() {
     return selected;
 }
 
-// Render uploaded documents
 function renderDocuments() {
     if (!documentList) return;
 
-    const searchTerm =
-        searchInput?.value.trim().toLowerCase() || '';
+    const term = searchInput?.value.trim().toLowerCase() || '';
 
-    const filteredDocuments = documents.filter(item =>
-        item.filename.toLowerCase().includes(searchTerm)
+    const filtered = documents.filter(item =>
+        item.filename.toLowerCase().includes(term)
     );
 
     documentList.replaceChildren();
 
-    if (filteredDocuments.length === 0) {
-        const emptyMessage = document.createElement('p');
-
-        emptyMessage.className = 'empty-message';
-        emptyMessage.textContent = searchTerm
+    if (!filtered.length) {
+        const p = document.createElement('p');
+        p.className = 'empty-message';
+        p.textContent = term
             ? 'No matching documents found.'
             : 'No uploaded documents found. Upload your first document.';
 
-        documentList.appendChild(emptyMessage);
+        documentList.appendChild(p);
         return;
     }
 
-    filteredDocuments.forEach(item => {
+    filtered.forEach(item => {
         const button = document.createElement('button');
-
         button.type = 'button';
         button.className = 'document-card';
 
@@ -215,15 +221,12 @@ function renderDocuments() {
         details.append(name, status);
         button.append(icon, details);
 
-        button.addEventListener('click', () => {
-            selectDocument(item);
-        });
+        button.addEventListener('click', () => selectDocument(item));
 
         documentList.appendChild(button);
     });
 }
 
-// Select a document and update the interface
 function selectDocument(item) {
     selectedDocumentId = item.document_id;
 
@@ -238,13 +241,11 @@ function selectDocument(item) {
 
     renderDocuments();
 
-    if (item.processing_status !== 'processed') {
-        setDocumentStatus(
-            'This document is not processed yet. Please select a processed document.'
-        );
-    } else {
-        setDocumentStatus(`Selected: ${item.filename}`);
-    }
+    setDocumentStatus(
+        item.processing_status === 'processed'
+            ? `Selected: ${item.filename}`
+            : 'This document is not processed yet. Please select a processed document.'
+    );
 
     if (summaryResult) {
         summaryResult.textContent =
@@ -254,45 +255,42 @@ function selectDocument(item) {
     if (quizResult) {
         quizResult.replaceChildren();
 
-        const message = document.createElement('p');
-        message.textContent =
+        const p = document.createElement('p');
+        p.textContent =
             'Generate a quiz to test your understanding of this document.';
 
-        quizResult.appendChild(message);
+        quizResult.appendChild(p);
     }
 }
 
-// Load uploaded documents from the backend
 async function loadDocuments(options = {}) {
-    const { selectDocumentId: requestedDocumentId = null } = options;
-
     setDocumentStatus('Loading your documents...');
 
     try {
-        const response = await fetch(`${API_BASE_URL}/upload`);
+        const response = await authenticatedFetch(`${API_BASE_URL}/upload`);
         const data = await readResponse(response);
 
-        const receivedDocuments = Array.isArray(data)
-            ? data
-            : data.documents || [];
-
-        documents = receivedDocuments
+        documents = (
+            Array.isArray(data) ? data : data.documents || []
+        )
             .map(normalizeDocument)
-            .filter(item => item.document_id != null);
+            .filter(document => document.document_id != null);
 
-        if (requestedDocumentId != null) {
-            selectedDocumentId = requestedDocumentId;
+        if (options.selectDocumentId != null) {
+            selectedDocumentId = options.selectDocumentId;
         }
 
         let selected = documents.find(
-            item =>
-                String(item.document_id) === String(selectedDocumentId)
+            document =>
+                String(document.document_id) ===
+                String(selectedDocumentId)
         );
 
-        if (!selected && documents.length > 0) {
-            selected = documents.find(
-                item => item.processing_status === 'processed'
-            ) || documents[0];
+        if (!selected && documents.length) {
+            selected =
+                documents.find(
+                    document => document.processing_status === 'processed'
+                ) || documents[0];
 
             selectedDocumentId = selected.document_id;
         }
@@ -323,14 +321,10 @@ async function loadDocuments(options = {}) {
         setDocumentStatus(`${documents.length} document(s) loaded.`);
     } catch (error) {
         console.error('Document loading failed:', error);
-
-        setDocumentStatus(
-            `Could not load documents: ${error.message}`
-        );
+        setDocumentStatus(`Could not load documents: ${error.message}`);
     }
 }
 
-// Upload and process a lecture document
 if (uploadButton && fileInput) {
     uploadButton.addEventListener('click', async () => {
         if (isUploading) return;
@@ -361,8 +355,6 @@ if (uploadButton && fileInput) {
         }
 
         const formData = new FormData();
-
-        // Must match upload.single('document') in the backend.
         formData.append('document', file);
 
         isUploading = true;
@@ -374,28 +366,27 @@ if (uploadButton && fileInput) {
         );
 
         try {
-            const response = await fetch(`${API_BASE_URL}/upload`, {
+            const response = await authenticatedFetch(`${API_BASE_URL}/upload`, {
                 method: 'POST',
                 body: formData
             });
 
             const data = await readResponse(response);
-            const newDocumentId = data.file?.documentId;
+
+            const newId =
+                data.file?.documentId ??
+                data.document?.document_id;
 
             await loadDocuments({
-                selectDocumentId: newDocumentId ?? null
+                selectDocumentId: newId ?? null
             });
 
-            if (newDocumentId != null) {
-                const uploadedDocument = documents.find(
-                    item =>
-                        String(item.document_id) ===
-                        String(newDocumentId)
-                );
+            const uploaded = documents.find(
+                document => String(document.document_id) === String(newId)
+            );
 
-                if (uploadedDocument) {
-                    selectDocument(uploadedDocument);
-                }
+            if (uploaded) {
+                selectDocument(uploaded);
             }
 
             fileInput.value = '';
@@ -414,19 +405,17 @@ if (uploadButton && fileInput) {
     });
 }
 
-// Refresh document list
 if (refreshButton) {
     refreshButton.addEventListener('click', () => loadDocuments());
 }
 
-// Search documents
 if (searchInput) {
     searchInput.addEventListener('input', renderDocuments);
 }
 
-// Escape text before formatting generated Markdown
+// Escape text before inserting formatted Markdown into HTML.
 function escapeHTML(value) {
-    return String(value)
+    return String(value ?? '')
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
@@ -434,118 +423,31 @@ function escapeHTML(value) {
         .replace(/'/g, '&#39;');
 }
 
-// Format Markdown summaries into HTML headings, paragraphs and lists
 function formatSummary(markdown) {
-    let text = escapeHTML(markdown || '')
-        .replace(/\r\n?/g, '\n');
+    const escaped = escapeHTML(markdown || '');
 
-    // Put headings on their own lines when necessary.
-    text = text.replace(/[ \t]+(#{1,4}\s+)/g, '\n$1');
-
-    // Separate headings that follow text without a line break.
-    text = text.replace(/([.!?])\s+(#{1,4}\s+)/g, '$1\n$2');
-
-    // Remove horizontal Markdown separators.
-    text = text.replace(/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/gm, '');
-
-    const lines = text.split('\n');
-    const output = [];
-
-    let paragraph = [];
-    let listOpen = false;
-
-    function inlineFormatting(value) {
-        return value
-            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-            .replace(/__(.+?)__/g, '<strong>$1</strong>')
-            .replace(/\*(.+?)\*/g, '<em>$1</em>')
-            .replace(/`(.+?)`/g, '<code>$1</code>');
-    }
-
-    function flushParagraph() {
-        if (paragraph.length) {
-            output.push(
-                `<p>${inlineFormatting(paragraph.join(' '))}</p>`
-            );
-
-            paragraph = [];
-        }
-    }
-
-    function closeList() {
-        if (listOpen) {
-            output.push('</ul>');
-            listOpen = false;
-        }
-    }
-
-    for (const rawLine of lines) {
-        const line = rawLine.trim();
-
-        if (!line) {
-            flushParagraph();
-            closeList();
-            continue;
-        }
-
-        // Remove Markdown separators.
-        if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(line)) {
-            flushParagraph();
-            closeList();
-            continue;
-        }
-
-        // Convert Markdown headings.
-        const heading = line.match(/^(#{1,4})\s+(.+)$/);
-
-        if (heading) {
-            flushParagraph();
-            closeList();
-
-            const level = heading[1].length;
-            const content = heading[2];
-
-            output.push(
-                `<h${level}>${inlineFormatting(content)}</h${level}>`
-            );
-
-            continue;
-        }
-
-        // Convert bullet points.
-        const bullet = line.match(/^[-*+]\s+(.+)$/);
-
-        if (bullet) {
-            flushParagraph();
-
-            if (!listOpen) {
-                output.push('<ul>');
-                listOpen = true;
-            }
-
-            output.push(
-                `<li>${inlineFormatting(bullet[1])}</li>`
-            );
-
-            continue;
-        }
-
-        closeList();
-        paragraph.push(line);
-    }
-
-    flushParagraph();
-    closeList();
-
-    return output.join('\n');
+    return escaped
+        .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
+        .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+        .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+        .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+        .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
+        .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .split(/\n{2,}/)
+        .map(part =>
+            /^(<h[1-4]>|<ul>)/.test(part.trim())
+                ? part
+                : `<p>${part.replace(/\n/g, '<br>')}</p>`
+        )
+        .join('\n');
 }
 
-// Generate a summary of the selected document
+// Generate a summary for the selected document.
 async function generateDocumentSummary() {
     if (isGeneratingSummary) return;
 
     const selected = requireSelectedDocument();
-
     if (!selected) return;
 
     isGeneratingSummary = true;
@@ -570,30 +472,18 @@ async function generateDocumentSummary() {
     );
 
     try {
-        const response = await fetch(
-            `${API_BASE_URL}/ai/summarize`,
-            {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    documentId: Number(selectedDocumentId)
-                })
-            }
-        );
+        const response = await authenticatedFetch(`${API_BASE_URL}/ai/summarize`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                documentId: Number(selectedDocumentId)
+            })
+        });
 
         const data = await readResponse(response);
 
-        if (
-            typeof data.summary !== 'string' ||
-            !data.summary.trim()
-        ) {
-            throw new Error(
-                data.error ||
-                data.message ||
-                'The server returned an empty summary.'
-            );
+        if (typeof data.summary !== 'string' || !data.summary.trim()) {
+            throw new Error('The server returned an empty summary.');
         }
 
         if (summaryResult) {
@@ -609,9 +499,7 @@ async function generateDocumentSummary() {
                 `Could not generate summary: ${error.message}`;
         }
 
-        setDocumentStatus(
-            `Summary failed: ${error.message}`
-        );
+        setDocumentStatus(`Summary failed: ${error.message}`);
     } finally {
         isGeneratingSummary = false;
 
@@ -627,12 +515,8 @@ async function generateDocumentSummary() {
     }
 }
 
-// Summary button events
 if (summaryButton) {
-    summaryButton.addEventListener(
-        'click',
-        generateDocumentSummary
-    );
+    summaryButton.addEventListener('click', generateDocumentSummary);
 }
 
 if (panelSummaryButton) {
@@ -642,32 +526,30 @@ if (panelSummaryButton) {
     );
 }
 
-// Display chat messages safely
+// Add a chat message to the interface.
 function appendChatMessage(message, sender) {
     if (!chatMessages) return null;
 
-    const messageElement = document.createElement('div');
+    const element = document.createElement('div');
 
-    messageElement.className =
+    element.className =
         `chat-message ${sender === 'user' ? 'user-message' : 'ai-message'}`;
 
     const paragraph = document.createElement('p');
     paragraph.textContent = message;
 
-    messageElement.appendChild(paragraph);
-    chatMessages.appendChild(messageElement);
-
+    element.appendChild(paragraph);
+    chatMessages.appendChild(element);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
-    return messageElement;
+    return element;
 }
 
-// Send a question about the selected document
+// Ask NeuroLearn a question about the selected document.
 async function sendChatMessage(message) {
     if (isSendingMessage) return;
 
     const selected = requireSelectedDocument();
-
     if (!selected) return;
 
     const question = String(message || '').trim();
@@ -684,8 +566,8 @@ async function sendChatMessage(message) {
     isSendingMessage = true;
 
     if (sendButton) {
+        // Keep the send icon visible while preventing duplicate submissions.
         sendButton.disabled = true;
-        sendButton.textContent = 'Sending...';
     }
 
     appendChatMessage(question, 'user');
@@ -694,7 +576,7 @@ async function sendChatMessage(message) {
         chatInput.value = '';
     }
 
-    const loadingMessage = appendChatMessage(
+    const loading = appendChatMessage(
         'Reading your notes and preparing an answer...',
         'ai'
     );
@@ -702,11 +584,9 @@ async function sendChatMessage(message) {
     setDocumentStatus('NeuroLearn is answering your question...');
 
     try {
-        const response = await fetch(`${API_BASE_URL}/ai/chat`, {
+        const response = await authenticatedFetch(`${API_BASE_URL}/ai/chat`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 documentId: Number(selectedDocumentId),
                 message: question
@@ -715,28 +595,61 @@ async function sendChatMessage(message) {
 
         const data = await readResponse(response);
 
+        if (typeof data.answer !== 'string' || !data.answer.trim()) {
+            throw new Error('The server returned an empty answer.');
+        }
+
+        if (loading) {
+            loading.querySelector('p').textContent = data.answer;
+        }
+
         if (
-            typeof data.answer !== 'string' ||
-            !data.answer.trim()
+            Array.isArray(data.sources) &&
+            data.sources.length &&
+            loading
         ) {
-            throw new Error(
-                data.error ||
-                data.message ||
-                'The server returned an empty answer.'
-            );
+            const list = document.createElement('ul');
+
+            data.sources.forEach(source => {
+                try {
+                    const url = new URL(source.url);
+
+                    if (!['http:', 'https:'].includes(url.protocol)) {
+                        return;
+                    }
+
+                    const li = document.createElement('li');
+                    const link = document.createElement('a');
+
+                    link.href = url.href;
+                    link.textContent = source.title || url.hostname;
+                    link.target = '_blank';
+                    link.rel = 'noopener noreferrer';
+
+                    li.appendChild(link);
+                    list.appendChild(li);
+                } catch {
+                    // Skip malformed URLs.
+                }
+            });
+
+            if (list.childNodes.length) {
+                const label = document.createElement('p');
+                label.textContent = 'Sources:';
+                loading.append(label, list);
+            }
         }
 
-        if (loadingMessage) {
-            loadingMessage.querySelector('p').textContent =
-                data.answer;
-        }
-
-        setDocumentStatus('Answer received.');
+        setDocumentStatus(
+            data.searchPerformed
+                ? 'Answer received with online research.'
+                : 'Answer received.'
+        );
     } catch (error) {
         console.error('Chat request failed:', error);
 
-        if (loadingMessage) {
-            loadingMessage.querySelector('p').textContent =
+        if (loading) {
+            loading.querySelector('p').textContent =
                 `Sorry, I could not answer that: ${error.message}`;
         }
 
@@ -745,8 +658,8 @@ async function sendChatMessage(message) {
         isSendingMessage = false;
 
         if (sendButton) {
+            // Re-enable the button without changing its send icon.
             sendButton.disabled = false;
-            sendButton.textContent = 'Send';
         }
 
         if (chatMessages) {
@@ -757,40 +670,53 @@ async function sendChatMessage(message) {
     }
 }
 
-// Connect the chat form
 if (chatForm) {
     chatForm.addEventListener('submit', async event => {
         event.preventDefault();
 
-        if (!chatInput) return;
-
-        await sendChatMessage(chatInput.value);
+        if (chatInput) {
+            await sendChatMessage(chatInput.value);
+        }
     });
 }
 
-// Connect suggested question prompts
-document.querySelectorAll('.suggested-prompts [data-prompt]')
+// Enter sends the message; Shift + Enter inserts a new line.
+if (chatInput && chatForm) {
+    chatInput.addEventListener('keydown', event => {
+        if (
+            event.key === 'Enter' &&
+            !event.shiftKey &&
+            !event.isComposing
+        ) {
+            event.preventDefault();
+
+            if (!isSendingMessage && chatInput.value.trim()) {
+                chatForm.requestSubmit();
+            }
+        }
+    });
+}
+
+document
+    .querySelectorAll('.suggested-prompts [data-prompt]')
     .forEach(button => {
         button.addEventListener('click', async () => {
-            const prompt = button.dataset.prompt;
-
-            if (prompt) {
-                await sendChatMessage(prompt);
+            if (button.dataset.prompt) {
+                await sendChatMessage(button.dataset.prompt);
             }
         });
     });
 
-// Render the generated quiz with selectable answers
-function renderQuiz(questions) {
+// Display quiz questions and submit answers for server-side scoring.
+function renderQuiz(quizId, questions) {
     if (!quizResult) return;
 
     quizResult.replaceChildren();
 
-    if (!Array.isArray(questions) || questions.length === 0) {
-        const message = document.createElement('p');
-        message.textContent = 'No quiz questions were returned.';
-
-        quizResult.appendChild(message);
+    if (!Array.isArray(questions) || !questions.length) {
+        const paragraph = document.createElement('p');
+        paragraph.textContent = 'No quiz questions were returned.';
+        quizResult.appendChild(paragraph);
         return;
     }
 
@@ -802,19 +728,25 @@ function renderQuiz(questions) {
 
     const instruction = document.createElement('p');
     instruction.textContent =
-        'Choose one answer for each question, then submit your answers to see your score and explanations.';
+        'Choose one answer for each question, then submit to save your score and review explanations.';
 
     form.append(heading, instruction);
 
-    questions.forEach((question, questionIndex) => {
+    questions.forEach((question, index) => {
         const fieldset = document.createElement('fieldset');
         fieldset.className = 'quiz-question';
 
         const legend = document.createElement('legend');
-        legend.textContent =
-            `${questionIndex + 1}. ${question.question}`;
+        legend.textContent = `${index + 1}. ${question.question}`;
 
         fieldset.appendChild(legend);
+
+        if (question.conceptName) {
+            const concept = document.createElement('small');
+            concept.className = 'quiz-concept';
+            concept.textContent = `Concept: ${question.conceptName}`;
+            fieldset.appendChild(concept);
+        }
 
         question.options.forEach(option => {
             const label = document.createElement('label');
@@ -822,121 +754,172 @@ function renderQuiz(questions) {
 
             const input = document.createElement('input');
             input.type = 'radio';
-            input.name = `question-${questionIndex}`;
+            input.name = `question-${index}`;
             input.value = option;
             input.required = true;
 
-            const optionText = document.createElement('span');
-            optionText.textContent = option;
+            const span = document.createElement('span');
+            span.textContent = option;
 
-            label.append(input, optionText);
+            label.append(input, span);
             fieldset.appendChild(label);
         });
 
         form.appendChild(fieldset);
     });
 
-    const submitButton = document.createElement('button');
-    submitButton.type = 'submit';
-    submitButton.className = 'quiz-submit-button';
-    submitButton.textContent = 'Submit Answers';
+    const submit = document.createElement('button');
+    submit.type = 'submit';
+    submit.className = 'quiz-submit-button';
+    submit.textContent = 'Submit Answers';
 
-    form.appendChild(submitButton);
+    form.appendChild(submit);
     quizResult.appendChild(form);
 
-    form.addEventListener('submit', event => {
+    form.addEventListener('submit', async event => {
         event.preventDefault();
 
+        if (submit.disabled) return;
+
         const formData = new FormData(form);
-        let score = 0;
 
-        const reviewContainer = document.createElement('div');
-        reviewContainer.className = 'quiz-review-container';
-
-        questions.forEach((question, questionIndex) => {
-            const selectedAnswer = formData.get(
-                `question-${questionIndex}`
-            );
-
-            const isCorrect =
-                selectedAnswer === question.correctAnswer;
-
-            if (isCorrect) {
-                score++;
-            }
-
-            const review = document.createElement('div');
-            review.className = 'quiz-review';
-
-            const title = document.createElement('h4');
-            title.textContent =
-                `${questionIndex + 1}. ${isCorrect ? 'Correct' : 'Review your answer'}`;
-
-            const yourAnswer = document.createElement('p');
-            yourAnswer.textContent =
-                `Your answer: ${selectedAnswer || 'No answer'}`;
-
-            const correctAnswer = document.createElement('p');
-            correctAnswer.textContent =
-                `Correct answer: ${question.correctAnswer}`;
-
-            const explanation = document.createElement('p');
-            explanation.textContent =
-                `Explanation: ${question.explanation}`;
-
-            review.append(
-                title,
-                yourAnswer,
-                correctAnswer,
-                explanation
-            );
-
-            reviewContainer.appendChild(review);
-        });
-
-        const resultHeading = document.createElement('h3');
-        resultHeading.textContent =
-            `Your score: ${score} / ${questions.length}`;
-
-        const percentage = Math.round(
-            (score / questions.length) * 100
+        const answers = questions.map(
+            (question, questionIndex) => ({
+                questionIndex,
+                selectedAnswer: String(
+                    formData.get(`question-${questionIndex}`) ?? ''
+                )
+            })
         );
 
-        const resultText = document.createElement('p');
-        resultText.textContent = `You scored ${percentage}%.`;
-
-        form.replaceChildren(
-            resultHeading,
-            resultText,
-            reviewContainer
-        );
+        submit.disabled = true;
+        submit.textContent = 'Saving results...';
 
         setDocumentStatus(
-            `Quiz completed. Score: ${score}/${questions.length}.`
+            'Saving your quiz results and updating concept mastery...'
         );
+
+        try {
+            const response = await authenticatedFetch(
+                `${API_BASE_URL}/ai/quiz/submit`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        quizId,
+                        answers
+                    })
+                }
+            );
+
+            const result = await readResponse(response);
+
+            const reviewContainer = document.createElement('div');
+            reviewContainer.className = 'quiz-review-container';
+
+            (result.review || []).forEach((item, index) => {
+                const review = document.createElement('div');
+                review.className = 'quiz-review';
+
+                const title = document.createElement('h4');
+                title.textContent =
+                    `${index + 1}. ${item.isCorrect ? 'Correct' : 'Review your answer'}`;
+
+                const concept = document.createElement('p');
+                concept.textContent =
+                    `Concept: ${item.conceptName || 'Unspecified'}`;
+
+                const yourAnswer = document.createElement('p');
+                yourAnswer.textContent =
+                    `Your answer: ${item.selectedAnswer || 'No answer'}`;
+
+                const correctAnswer = document.createElement('p');
+                correctAnswer.textContent =
+                    `Correct answer: ${item.correctAnswer}`;
+
+                const explanation = document.createElement('p');
+                explanation.textContent =
+                    `Explanation: ${item.explanation}`;
+
+                review.append(
+                    title,
+                    concept,
+                    yourAnswer,
+                    correctAnswer,
+                    explanation
+                );
+
+                reviewContainer.appendChild(review);
+            });
+
+            const resultHeading = document.createElement('h3');
+            resultHeading.textContent =
+                `Your score: ${result.correctCount} / ${result.totalQuestions}`;
+
+            const resultText = document.createElement('p');
+            resultText.textContent =
+                `Overall score: ${Number(result.overallScore).toFixed(2)}%. Your result has been saved.`;
+
+            const conceptHeading = document.createElement('h3');
+            conceptHeading.textContent = 'Concept mastery';
+
+            const conceptList = document.createElement('ul');
+
+            (result.conceptResults || []).forEach(item => {
+                const li = document.createElement('li');
+
+                li.textContent =
+                    `${item.conceptName}: ${Number(item.masteryLevel).toFixed(2)}%` +
+                    (item.needsRevision
+                        ? ' — recommended for revision'
+                        : '');
+
+                conceptList.appendChild(li);
+            });
+
+            form.replaceChildren(
+                resultHeading,
+                resultText,
+                conceptHeading,
+                conceptList,
+                reviewContainer
+            );
+
+            setDocumentStatus(
+                `Quiz saved. Score: ${result.correctCount}/${result.totalQuestions} (${Number(result.overallScore).toFixed(2)}%).`
+            );
+        } catch (error) {
+            console.error('Quiz submission failed:', error);
+
+            const message = document.createElement('p');
+            message.className = 'error-message';
+            message.textContent =
+                `Your results could not be saved: ${error.message}. Your quiz answers may still be available; try submitting again only if the quiz has not expired.`;
+
+            form.prepend(message);
+            submit.disabled = false;
+            submit.textContent = 'Retry Saving Answers';
+
+            setDocumentStatus(`Quiz save failed: ${error.message}`);
+        }
     });
 }
 
-// Generate a quiz from the selected document
+// Generate a quiz for the selected document.
 async function generateDocumentQuiz() {
     if (isGeneratingQuiz) return;
 
     const selected = requireSelectedDocument();
-
     if (!selected) return;
 
-    const questionCount = Number(
-        questionCountInput?.value || 5
-    );
+    const questionCount = Number(questionCountInput?.value || 5);
 
     if (
         !Number.isInteger(questionCount) ||
         questionCount < 1 ||
         questionCount > 10
     ) {
-        setDocumentStatus(
-            'Choose between 1 and 10 quiz questions.'
-        );
+        setDocumentStatus('Choose between 1 and 10 quiz questions.');
         return;
     }
 
@@ -955,21 +938,19 @@ async function generateDocumentQuiz() {
     if (quizResult) {
         quizResult.replaceChildren();
 
-        const message = document.createElement('p');
-        message.textContent =
+        const paragraph = document.createElement('p');
+        paragraph.textContent =
             `Generating ${questionCount} questions from "${selected.filename}". Please wait...`;
 
-        quizResult.appendChild(message);
+        quizResult.appendChild(paragraph);
     }
 
     setDocumentStatus('NeuroLearn is generating your quiz...');
 
     try {
-        const response = await fetch(`${API_BASE_URL}/ai/quiz`, {
+        const response = await authenticatedFetch(`${API_BASE_URL}/ai/quiz`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 documentId: Number(selectedDocumentId),
                 questionCount
@@ -979,29 +960,29 @@ async function generateDocumentQuiz() {
         const data = await readResponse(response);
 
         if (
+            typeof data.quizId !== 'string' ||
             !Array.isArray(data.questions) ||
             data.questions.length !== questionCount
         ) {
-            throw new Error(
-                data.error ||
-                'The server returned an invalid quiz.'
-            );
+            throw new Error('The server returned an invalid quiz.');
         }
 
-        renderQuiz(data.questions);
+        renderQuiz(data.quizId, data.questions);
 
-        setDocumentStatus('Quiz generated successfully.');
+        setDocumentStatus(
+            'Quiz generated. Complete all questions and submit to save your results.'
+        );
     } catch (error) {
         console.error('Quiz generation failed:', error);
 
         if (quizResult) {
             quizResult.replaceChildren();
 
-            const message = document.createElement('p');
-            message.textContent =
+            const paragraph = document.createElement('p');
+            paragraph.textContent =
                 `Could not generate quiz: ${error.message}`;
 
-            quizResult.appendChild(message);
+            quizResult.appendChild(paragraph);
         }
 
         setDocumentStatus(`Quiz failed: ${error.message}`);
@@ -1020,7 +1001,6 @@ async function generateDocumentQuiz() {
     }
 }
 
-// Quiz button events
 if (generateQuizButton) {
     generateQuizButton.addEventListener(
         'click',
@@ -1035,7 +1015,7 @@ if (openQuizButton) {
     );
 }
 
-// Switch between Summary, Quiz and Notes tabs
+// Switch between study tabs.
 document.querySelectorAll('.study-tab').forEach(button => {
     button.addEventListener('click', () => {
         const selectedTab = button.dataset.tab;
@@ -1045,16 +1025,50 @@ document.querySelectorAll('.study-tab').forEach(button => {
         });
 
         document.querySelectorAll('.tab-content').forEach(panel => {
-            const isSelected =
-                panel.id === `${selectedTab}-tab`;
+            const active = panel.id === `${selectedTab}-tab`;
 
-            panel.hidden = !isSelected;
-            panel.classList.toggle('active', isSelected);
+            panel.hidden = !active;
+            panel.classList.toggle('active', active);
         });
     });
 });
 
-// Initialize the workspace
-if (learner) {
-    loadDocuments();
+// Confirm the learner identity with the backend before loading private data.
+async function initializeStudyWorkspace() {
+    try {
+        const response = await authenticatedFetch(
+            `${API_BASE_URL}/auth/me`
+        );
+
+        const data = await readResponse(response);
+
+        if (!data.learner || !data.learner.learner_id) {
+            throw new Error('The server did not return a valid learner account.');
+        }
+
+        learner = data.learner;
+        sessionStorage.setItem(
+            'neurolearnLearner',
+            JSON.stringify(learner)
+        );
+
+        if (learnerName) {
+            learnerName.textContent =
+                learner.username || learner.name || 'Learner';
+        }
+
+        await loadDocuments();
+    } catch (error) {
+        console.error('Study workspace initialization failed:', error);
+
+        if (sessionStorage.getItem('neurolearnToken')) {
+            setDocumentStatus(
+                `Could not initialize your study workspace: ${error.message}`
+            );
+        }
+    }
+}
+
+if (learner && storedToken) {
+    initializeStudyWorkspace();
 }

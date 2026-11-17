@@ -1,3 +1,4 @@
+'use strict';
 
 const express = require('express');
 const multer = require('multer');
@@ -6,6 +7,7 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 
 const mysql = require('../config/mysql');
+const authenticateToken = require('../middleware/authenticateToken');
 
 const router = express.Router();
 
@@ -29,19 +31,23 @@ const uploadFolder = path.join(projectRoot, 'storage', 'uploads');
 
 fs.mkdirSync(uploadFolder, { recursive: true });
 
+// Configure uploaded file storage.
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         cb(null, uploadFolder);
     },
 
     filename: (req, file, cb) => {
-        const uniqueName = `${Date.now()}-${path.basename(file.originalname)}`;
+        const uniqueName =
+            `${Date.now()}-${path.basename(file.originalname)}`;
+
         cb(null, uniqueName);
     }
 });
 
 const upload = multer({
     storage,
+
     limits: {
         fileSize: 10 * 1024 * 1024
     },
@@ -53,11 +59,14 @@ const upload = multer({
         if (allowedTypes.includes(extension)) {
             cb(null, true);
         } else {
-            cb(new Error('Only PDF, DOCX and PPTX files are supported.'));
+            cb(new Error(
+                'Only PDF, DOCX and PPTX files are supported.'
+            ));
         }
     }
 });
 
+// Process the uploaded document using the Python processor.
 function processDocument(filePath) {
     return new Promise((resolve, reject) => {
         execFile(
@@ -69,6 +78,7 @@ function processDocument(filePath) {
                         'Python processing failed:',
                         stderr || error.message
                     );
+
                     reject(error);
                     return;
                 }
@@ -80,12 +90,11 @@ function processDocument(filePath) {
     });
 }
 
-// TEMPORARY: Replace with the authenticated learner ID
-// when server-side authentication is implemented.
-const learnerId = 1;
+// GET /api/upload
+// Retrieve only documents belonging to the authenticated learner.
+router.get('/', authenticateToken, async (req, res) => {
+    const learnerId = req.user.learner_id;
 
-// GET /api/upload - retrieve documents for the current development learner
-router.get('/', async (req, res) => {
     try {
         const [documents] = await mysql.execute(
             `SELECT
@@ -102,8 +111,12 @@ router.get('/', async (req, res) => {
         );
 
         return res.json({ documents });
+
     } catch (error) {
-        console.error('Could not retrieve documents:', error.message);
+        console.error(
+            'Could not retrieve documents:',
+            error.message
+        );
 
         return res.status(500).json({
             message: 'Unable to retrieve uploaded documents.'
@@ -111,97 +124,119 @@ router.get('/', async (req, res) => {
     }
 });
 
-// POST /api/upload - upload and process a document
-router.post('/', (req, res, next) => {
-    // Must match formData.append('document', file) in dashboard.js
-    upload.single('document')(req, res, error => {
-        if (error) {
-            const status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+// POST /api/upload
+// Authenticate before accepting or processing the uploaded file.
+router.post(
+    '/',
+    authenticateToken,
+    (req, res, next) => {
+        // Must match formData.append('document', file) in study.js.
+        upload.single('document')(req, res, error => {
+            if (error) {
+                const status =
+                    error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
 
-            return res.status(status).json({
-                message: error.code === 'LIMIT_FILE_SIZE'
-                    ? 'File size must not exceed 10 MB.'
-                    : error.message
+                return res.status(status).json({
+                    message: error.code === 'LIMIT_FILE_SIZE'
+                        ? 'File size must not exceed 10 MB.'
+                        : error.message
+                });
+            }
+
+            next();
+        });
+    },
+    async (req, res) => {
+        if (!req.file) {
+            return res.status(400).json({
+                message: 'Please select a document to upload.'
             });
         }
 
-        next();
-    });
-}, async (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({
-            message: 'Please select a document to upload.'
-        });
-    }
+        // Get the learner identity from the verified JWT session.
+        const learnerId = req.user.learner_id;
 
-    const extension = path.extname(req.file.originalname).toLowerCase();
-    const fileType = extension.substring(1);
-    const filePath = path.relative(projectRoot, req.file.path);
+        const extension = path.extname(
+            req.file.originalname
+        ).toLowerCase();
 
-    let documentId;
+        const fileType = extension.substring(1);
+        const filePath = path.relative(projectRoot, req.file.path);
 
-    try {
-        const [result] = await mysql.execute(
-            `INSERT INTO uploaded_document
-                (learner_id, filename, file_type, file_size,
-                 file_path, processing_status)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [
-                learnerId,
-                req.file.originalname,
-                fileType,
-                req.file.size,
-                filePath,
-                'uploaded'
-            ]
-        );
-
-        documentId = result.insertId;
+        let documentId;
 
         try {
-            await processDocument(req.file.path);
-
-            await mysql.execute(
-                `UPDATE uploaded_document
-                 SET processing_status = ?
-                 WHERE document_id = ?`,
-                ['processed', documentId]
+            const [result] = await mysql.execute(
+                `INSERT INTO uploaded_document
+                    (learner_id, filename, file_type, file_size,
+                     file_path, processing_status)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [
+                    learnerId,
+                    req.file.originalname,
+                    fileType,
+                    req.file.size,
+                    filePath,
+                    'uploaded'
+                ]
             );
 
-            return res.status(201).json({
-                message: 'Document uploaded and processed successfully.',
-                file: {
-                    documentId,
-                    originalName: req.file.originalname,
-                    type: fileType,
-                    size: req.file.size,
-                    processingStatus: 'processed'
-                }
-            });
-        } catch (processingError) {
-            await mysql.execute(
-                `UPDATE uploaded_document
-                 SET processing_status = ?
-                 WHERE document_id = ?`,
-                ['failed', documentId]
-            );
+            documentId = result.insertId;
+
+            try {
+                await processDocument(req.file.path);
+
+                await mysql.execute(
+                    `UPDATE uploaded_document
+                     SET processing_status = ?
+                     WHERE document_id = ?
+                     AND learner_id = ?`,
+                    ['processed', documentId, learnerId]
+                );
+
+                return res.status(201).json({
+                    message: 'Document uploaded and processed successfully.',
+                    file: {
+                        documentId,
+                        originalName: req.file.originalname,
+                        type: fileType,
+                        size: req.file.size,
+                        processingStatus: 'processed'
+                    }
+                });
+
+            } catch (processingError) {
+                console.error(
+                    'Document processing failed:',
+                    processingError.message
+                );
+
+                await mysql.execute(
+                    `UPDATE uploaded_document
+                     SET processing_status = ?
+                     WHERE document_id = ?
+                     AND learner_id = ?`,
+                    ['failed', documentId, learnerId]
+                );
+
+                return res.status(500).json({
+                    message: 'The document was uploaded, but processing failed.',
+                    file: {
+                        documentId,
+                        originalName: req.file.originalname,
+                        processingStatus: 'failed'
+                    }
+                });
+            }
+
+        } catch (error) {
+            console.error('Upload error:', error.message);
 
             return res.status(500).json({
-                message: 'The document was uploaded, but processing failed.',
-                file: {
-                    documentId,
-                    originalName: req.file.originalname,
-                    processingStatus: 'failed'
-                }
+                message: 'Unable to save the uploaded document.'
             });
         }
-    } catch (error) {
-        console.error('Upload error:', error.message);
-
-        return res.status(500).json({
-            message: 'Unable to save the uploaded document.'
-        });
     }
-});
+);
 
 module.exports = router;
