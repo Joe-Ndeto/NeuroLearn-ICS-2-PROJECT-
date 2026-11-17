@@ -2,8 +2,20 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const pool = require('../config/mysql');
+
+// Generate a JWT for an authenticated learner.
+function generateToken(learnerId) {
+    return jwt.sign(
+        { learnerId },
+        process.env.JWT_SECRET,
+        {
+            expiresIn: process.env.JWT_EXPIRES_IN || '1d'
+        }
+    );
+}
 
 // Format names supplied by Google.
 function formatName(name) {
@@ -65,14 +77,21 @@ router.post('/signup', async (req, res) => {
             [cleanUsername, cleanEmail, passwordHash]
         );
 
+        const learner = {
+            learner_id: result.insertId,
+            username: cleanUsername,
+            email: cleanEmail,
+            role: 'student'
+        };
+
+        const token = generateToken(learner.learner_id);
+
         return res.status(201).json({
             message: 'Account created successfully.',
-            learner: {
-                learner_id: result.insertId,
-                username: cleanUsername,
-                email: cleanEmail
-            }
+            token,
+            learner
         });
+
     } catch (error) {
         console.error('Signup error:', error);
 
@@ -94,7 +113,7 @@ router.post('/login', async (req, res) => {
 
     try {
         const [learners] = await pool.execute(
-            `SELECT learner_id, username, email, password_hash
+            `SELECT learner_id, username, email, password_hash, role
              FROM learner
              WHERE email = ?`,
             [email.trim().toLowerCase()]
@@ -122,14 +141,21 @@ router.post('/login', async (req, res) => {
             });
         }
 
+        const learnerData = {
+            learner_id: learner.learner_id,
+            username: learner.username,
+            email: learner.email,
+            role: learner.role
+        };
+
+        const token = generateToken(learner.learner_id);
+
         return res.status(200).json({
             message: 'Login successful.',
-            learner: {
-                learner_id: learner.learner_id,
-                username: learner.username,
-                email: learner.email
-            }
+            token,
+            learner: learnerData
         });
+
     } catch (error) {
         console.error('Login error:', error);
 
@@ -186,7 +212,7 @@ router.post('/google', async (req, res) => {
 
         // Check whether this Google account is already linked.
         const [linked] = await pool.execute(
-            `SELECT learner_id, username, email
+            `SELECT learner_id, username, email, role
              FROM learner
              WHERE google_id = ?`,
             [googleId]
@@ -197,7 +223,6 @@ router.post('/google', async (req, res) => {
 
             // Update the username if Google supplies a profile name.
             if (payload.name && payload.name.trim()) {
-                // Check whether another learner already uses this name.
                 const [nameMatches] = await pool.execute(
                     `SELECT learner_id
                      FROM learner
@@ -218,13 +243,19 @@ router.post('/google', async (req, res) => {
                 }
             }
 
+            const learnerData = {
+                learner_id: learner.learner_id,
+                username: learner.username,
+                email: learner.email,
+                role: learner.role
+            };
+
+            const token = generateToken(learner.learner_id);
+
             return res.status(200).json({
                 message: 'Google sign-in successful.',
-                learner: {
-                    learner_id: learner.learner_id,
-                    username: learner.username,
-                    email: learner.email
-                }
+                token,
+                learner: learnerData
             });
         }
 
@@ -281,14 +312,21 @@ router.post('/google', async (req, res) => {
             [username, email, googleId]
         );
 
+        const learnerData = {
+            learner_id: result.insertId,
+            username,
+            email,
+            role: 'student'
+        };
+
+        const token = generateToken(result.insertId);
+
         return res.status(201).json({
             message: 'Google account registered successfully.',
-            learner: {
-                learner_id: result.insertId,
-                username,
-                email
-            }
+            token,
+            learner: learnerData
         });
+
     } catch (error) {
         console.error('Google sign-in error:', error);
 
@@ -296,6 +334,17 @@ router.post('/google', async (req, res) => {
             error: 'Google sign-in failed. Please try again.'
         });
     }
+});
+
+
+const authenticateToken = require('../middleware/authenticateToken');
+
+// Get the currently authenticated learner.
+router.get('/me', authenticateToken, (req, res) => {
+    return res.status(200).json({
+        success: true,
+        learner: req.user
+    });
 });
 
 module.exports = router;
