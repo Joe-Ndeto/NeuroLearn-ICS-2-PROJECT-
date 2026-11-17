@@ -1,11 +1,14 @@
+
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard - NeuroLearn</title>
     <link rel="stylesheet" href="dashboard.css">
 </head>
+
 <body>
 
     <header>
@@ -13,227 +16,302 @@
             <div class="logo-icon">🧠</div>
             <span>NeuroLearn</span>
         </div>
+
         <div class="nav-links">
             <a href="dashboard.html" class="active">Dashboard</a>
-            <a href="#">Learning Path</a>
-            <a href="#">Resources</a>
-            <a href="#">Quizzes</a>
-            <a href="#">Progress</a>
-            <a href="#">Profile</a>
+            <a href="study.html">Study</a>
+            <a href="#" class="disabled-link" aria-disabled="true">Resources</a>
+            <a href="#" class="disabled-link" aria-disabled="true">Quizzes</a>
+            <a href="#" class="disabled-link" aria-disabled="true">Progress</a>
+            <a href="#" class="disabled-link" aria-disabled="true">Profile</a>
         </div>
+
         <div class="user-profile">
-            <img src="https://via.placeholder.com/35" alt="User" class="user-avatar">
-            <button class="btn-logout" onclick="window.location.href='login_signup.html'">Logout</button>
+            <img
+                src="https://via.placeholder.com/35"
+                alt="User profile"
+                class="user-avatar"
+            >
+            <button class="btn-logout" id="logout-button">Logout</button>
         </div>
     </header>
 
     <div class="main-container">
-        
-        <!-- Subheader -->
+
         <div class="subheader">
-            <div class="ai-badge">AI ADAPTIVE MODE ACTIVE</div>
-            <h1>Welcome back, Learner!</h1>
-            <p>Your personalized learning journey continues. Here's what AI recommends for you today.</p>
+            <div class="ai-badge">YOUR LEARNING JOURNEY</div>
+
+            <h1>
+                Welcome, <span id="learner-name">Learner</span>!
+            </h1>
+
+            <p>
+                Welcome to NeuroLearn. Start exploring learning materials,
+                study at your own pace, and build your knowledge along the way.
+            </p>
         </div>
 
-        <!-- Top 3 Metrics Cards -->
         <div class="top-stats-grid">
-            
-            <!-- Overall Progress -->
+
             <div class="stat-card">
                 <div class="stat-header">
                     <span>OVERALL PROGRESS</span>
                     <span>📈</span>
                 </div>
+
                 <div class="stat-value">
-                    72% <span class="tag-success">+4% today</span>
+                    <span id="overall-progress">0%</span>
                 </div>
+
                 <div class="progress-bar-bg">
-                    <div class="progress-bar-fill" style="width: 72%;"></div>
+                    <div
+                        class="progress-bar-fill"
+                        id="overall-progress-bar"
+                        style="width: 0%;"
+                    ></div>
                 </div>
-                <div class="stat-footer">Courses Completed: 18/25</div>
+
+                <div class="stat-footer" id="courses-completed">
+                    No courses completed yet
+                </div>
             </div>
 
-            <!-- Current Mastery Level -->
             <div class="stat-card">
                 <div class="stat-header">
                     <span>CURRENT MASTERY LEVEL</span>
                     <span>🎖️</span>
                 </div>
-                <div class="stat-value" style="font-size: 1.5rem; margin-top: 5px;">
-                    Advanced Beginner
+
+                <div
+                    class="stat-value"
+                    style="font-size: 1.5rem; margin-top: 5px;"
+                    id="mastery-level"
+                >
+                    Not assessed yet
                 </div>
+
                 <div class="mastery-steps">
-                    <div class="step active"></div>
-                    <div class="step active"></div>
-                    <div class="step active"></div>
-                    <div class="step active"></div>
+                    <div class="step"></div>
+                    <div class="step"></div>
+                    <div class="step"></div>
+                    <div class="step"></div>
                     <div class="step"></div>
                     <div class="step"></div>
                 </div>
-                <div class="stat-footer" style="display: flex; justify-content: space-between;">
-                    <span class="step-label">ACTIVE</span>
+
+                <div
+                    class="stat-footer"
+                    style="display: flex; justify-content: space-between;"
+                >
+                    <span class="step-label" id="mastery-status">
+                        Start learning to assess your level
+                    </span>
                 </div>
             </div>
 
-            <!-- Knowledge Gaps -->
             <div class="stat-card">
                 <div class="stat-header">
                     <span>KNOWLEDGE GAPS</span>
-                    <span>⚠️</span>
+                    <span>📚</span>
                 </div>
-                <div class="stat-value" style="font-size: 1.4rem; margin-top: 2px;">
-                    3 Areas Identified
+
+                <div
+                    class="stat-value"
+                    style="font-size: 1.2rem; margin-top: 2px;"
+                    id="knowledge-gaps-count"
+                >
+                    Not assessed yet
                 </div>
-                <div class="gaps-tags">
-                    <span class="gap-tag">Neural Networks</span>
-                    <span class="gap-tag">Backpropagation</span>
-                    <span class="gap-tag">Regularization</span>
+
+                <div class="gaps-tags" id="knowledge-gaps-list">
+                    <span class="gap-tag">
+                        Complete a learning activity to get started
+                    </span>
                 </div>
-                <button class="btn-outline">Review Gaps</button>
+
+                <button
+                    class="btn-outline"
+                    id="review-gaps-button"
+                    type="button"
+                    disabled
+                >
+                    Review Gaps
+                </button>
             </div>
 
         </div>
 
-        <!-- Recommendation Section -->
         <div style="margin-bottom: 40px;">
-            <div class="section-title">Recommended for You</div>
-            <div class="section-subtitle">Personalized based on your learning patterns and performance</div>
+            <div class="section-title">Start Learning</div>
+
+            <div class="section-subtitle">
+                Choose a starting point. Your recommendations can become
+                personalized as you use NeuroLearn.
+            </div>
 
             <div class="courses-grid">
-                
+
                 <div class="course-card">
                     <div>
                         <div class="course-card-top">
-                            <span class="badge-level">Intermediate</span>
-                            <span class="course-time">⏱️ 2.5 hrs</span>
+                            <span class="badge-level">Getting Started</span>
+                            <span class="course-time">📖 Learn at your pace</span>
                         </div>
+
                         <div class="course-title">
-                            <span>📦</span> Convolutional Neural Networks
+                            <span>📚</span> Explore Your Learning Materials
                         </div>
-                        <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
-                            <span>Course Progress</span>
-                            <span>45%</span>
-                        </div>
+
+                        <p style="font-size: 0.85rem; color: var(--text-muted);">
+                            Upload lecture notes and begin exploring
+                            concepts in your own study workspace.
+                        </p>
+
                         <div class="progress-bar-bg">
-                            <div class="progress-bar-fill" style="width: 45%;"></div>
+                            <div
+                                class="progress-bar-fill"
+                                style="width: 0%;"
+                            ></div>
+                        </div>
+
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">
+                            Start your first learning session
                         </div>
                     </div>
-                    <button class="btn-primary">Start Learning</button>
+
+                    <a href="study.html" class="btn-primary">
+                        Start Learning
+                    </a>
                 </div>
 
                 <div class="course-card">
                     <div>
                         <div class="course-card-top">
-                            <span class="badge-level">Advanced</span>
-                            <span class="course-time">⏱️ 4.0 hrs</span>
+                            <span class="badge-level">Practice</span>
+                            <span class="course-time">🧠 Build understanding</span>
                         </div>
+
                         <div class="course-title">
-                            <span>📄</span> Natural Language Processing
+                            <span>💡</span> Understand Difficult Concepts
                         </div>
-                        <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
-                            <span>Course Progress</span>
-                            <span>12%</span>
-                        </div>
+
+                        <p style="font-size: 0.85rem; color: var(--text-muted);">
+                            Ask questions about your learning materials
+                            and explore explanations with AI assistance.
+                        </p>
+
                         <div class="progress-bar-bg">
-                            <div class="progress-bar-fill" style="width: 12%;"></div>
+                            <div
+                                class="progress-bar-fill"
+                                style="width: 0%;"
+                            ></div>
+                        </div>
+
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">
+                            No activity recorded yet
                         </div>
                     </div>
-                    <button class="btn-primary">Start Learning</button>
+
+                    <a href="study.html" class="btn-primary">
+                        Explore Concepts
+                    </a>
                 </div>
 
                 <div class="course-card">
                     <div>
                         <div class="course-card-top">
-                            <span class="badge-level">Beginner</span>
-                            <span class="course-time">⏱️ 3.0 hrs</span>
+                            <span class="badge-level">Self-Assessment</span>
+                            <span class="course-time">✍️ Check understanding</span>
                         </div>
+
                         <div class="course-title">
-                            <span>⚙️</span> Reinforcement Learning
+                            <span>🎯</span> Test Your Knowledge
                         </div>
-                        <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
-                            <span>Course Progress</span>
-                            <span>0%</span>
-                        </div>
+
+                        <p style="font-size: 0.85rem; color: var(--text-muted);">
+                            Build your understanding first, then use
+                            available quizzes and assessments to check
+                            your progress.
+                        </p>
+
                         <div class="progress-bar-bg">
-                            <div class="progress-bar-fill" style="width: 0%;"></div>
+                            <div
+                                class="progress-bar-fill"
+                                style="width: 0%;"
+                            ></div>
+                        </div>
+
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">
+                            Your results will appear when available
                         </div>
                     </div>
-                    <button class="btn-primary">Start Learning</button>
+
+                    <a href="study.html" class="btn-primary">
+                        Get Started
+                    </a>
                 </div>
 
             </div>
         </div>
 
-        <!-- Bottom Grid: Activity & AI Assistant -->
         <div class="bottom-grid">
-            
-            <!-- Recent Activity -->
+
             <div class="activity-card">
-                <div class="section-title" style="margin-bottom: 20px;">Recent Activity</div>
-                
-                <div class="activity-item">
-                    <div class="activity-info">
-                        <div class="activity-icon">📊</div>
-                        <div>
-                            <div class="activity-name">Deep Learning Fundamentals Quiz</div>
-                            <div class="activity-time">2 hours ago</div>
-                        </div>
-                    </div>
-                    <div class="activity-score">85%</div>
+                <div class="section-title" style="margin-bottom: 20px;">
+                    Recent Activity
                 </div>
 
-                <div class="activity-item">
-                    <div class="activity-info">
-                        <div class="activity-icon">📊</div>
-                        <div>
-                            <div class="activity-name">Gradient Descent Assessment</div>
-                            <div class="activity-time">Yesterday</div>
-                        </div>
-                    </div>
-                    <div class="activity-score">92%</div>
-                </div>
+                <div id="recent-activity">
+                    <div class="activity-item">
+                        <div class="activity-info">
+                            <div class="activity-icon">📘</div>
 
-                <div class="activity-item">
-                    <div class="activity-info">
-                        <div class="activity-icon">📊</div>
-                        <div>
-                            <div class="activity-name">Python for ML Practice</div>
-                            <div class="activity-time">2 days ago</div>
-                        </div>
-                    </div>
-                    <div class="activity-score completed">Completed</div>
-                </div>
+                            <div>
+                                <div class="activity-name">
+                                    Your learning activity will appear here
+                                </div>
 
-                <div class="activity-item">
-                    <div class="activity-info">
-                        <div class="activity-icon">📊</div>
-                        <div>
-                            <div class="activity-name">Statistics Review</div>
-                            <div class="activity-time">3 days ago</div>
+                                <div class="activity-time">
+                                    You haven't started learning yet
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    <div class="activity-score">78%</div>
                 </div>
             </div>
 
-            <!-- AI Study Assistant Card -->
             <div class="ai-assistant-card">
-                <div>
-                    <div class="ai-badge">⚡ AI COMPANION</div>
-                    <h3>AI Study Assistant</h3>
-                    <p>Your AI assistant analyzes your learning patterns to create personalized study materials.</p>
-                </div>
-                <div class="ai-actions">
-                    <button class="btn-ai">📄 Generate Summary</button>
-                    <button class="btn-ai">⏱️ Generate Quiz</button>
-                </div>
-                <div class="ai-footer">Powered by adaptive AI algorithms</div>
+                <section class="ai-study-card">
+                    <div class="ai-study-content">
+                        <span class="ai-badge">AI STUDY PARTNER</span>
+
+                        <h2>Your learning space, powered by AI</h2>
+
+                        <p>
+                            Upload your lecture notes, ask questions,
+                            understand difficult concepts, generate
+                            summaries, and test your knowledge with
+                            interactive quizzes.
+                        </p>
+
+                        <a href="study.html" class="btn-ai">
+                            Open Study Workspace →
+                        </a>
+                    </div>
+                </section>
             </div>
 
+            <div id="ai-results" aria-live="polite"></div>
+
+        </div>
+
+        <div class="ai-footer">
+            Powered by adaptive AI algorithms
         </div>
 
     </div>
 
+    <script src="dashboard.js" defer></script>
 </body>
+
 </html>
