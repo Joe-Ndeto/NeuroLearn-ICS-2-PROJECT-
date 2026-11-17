@@ -5,6 +5,7 @@ const cors = require('cors');
 const healthRoute = require('./routes/health');
 const uploadRoute = require('./routes/upload');
 const authRoute = require('./routes/auth');
+const aiRoute = require('./routes/ai');
 
 const app = express();
 
@@ -13,6 +14,7 @@ app.use(express.json());
 app.use('/health', healthRoute);
 app.use('/api/upload', uploadRoute);
 app.use('/api/auth', authRoute);
+app.use('/api/ai', aiRoute);
 
 app.get('/', (req, res) => {
     res.json({
