@@ -8,6 +8,7 @@ const authRoute = require('./routes/auth');
 const aiRoute = require('./routes/ai');
 const knowledgeGraphRoute = require('./routes/knowledgeGraph');
 const submissionsRoute = require('./routes/submissions');
+const adminSubmissionsRoute = require('./routes/adminSubmissions');
 
 const app = express();
 
@@ -19,6 +20,7 @@ app.use('/api/auth', authRoute);
 app.use('/api/ai', aiRoute);
 app.use('/api/kg', knowledgeGraphRoute);
 app.use('/api/submissions', submissionsRoute);
+app.use('/api/admin/submissions', adminSubmissionsRoute);
 
 app.get('/', (req, res) => {
     res.json({
