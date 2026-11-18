@@ -16,6 +16,16 @@ CREATE TABLE concept (
     UNIQUE KEY uq_concept_graph_id (graph_concept_id)
 );
 
+CREATE TABLE concept_course (
+    concept_id INT NOT NULL,
+    course_graph_id VARCHAR(100) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (concept_id, course_graph_id),
+    KEY idx_concept_course_graph_id (course_graph_id),
+    CONSTRAINT fk_concept_course_concept FOREIGN KEY (concept_id)
+        REFERENCES concept (concept_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE knowledge_submissions (
     submission_id INT NOT NULL AUTO_INCREMENT,
     submission_type ENUM('CONCEPT', 'PREREQUISITE', 'RESOURCE') NOT NULL,
@@ -34,6 +44,28 @@ CREATE TABLE knowledge_submissions (
         REFERENCES learner (learner_id),
     CONSTRAINT fk_submission_submitter FOREIGN KEY (submitted_by)
         REFERENCES learner (learner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE knowledge_sync_outbox (
+    outbox_id BIGINT NOT NULL AUTO_INCREMENT,
+    submission_id INT NOT NULL,
+    sync_status ENUM('pending', 'processing', 'completed', 'failed')
+        NOT NULL DEFAULT 'pending',
+    attempt_count INT UNSIGNED NOT NULL DEFAULT 0,
+    available_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    lease_expires_at DATETIME NULL,
+    claim_token CHAR(36) NULL,
+    last_error TEXT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+    completed_at DATETIME NULL,
+    PRIMARY KEY (outbox_id),
+    UNIQUE KEY uq_knowledge_sync_outbox_submission (submission_id),
+    KEY idx_knowledge_sync_outbox_claim
+        (sync_status, available_at, lease_expires_at, outbox_id),
+    CONSTRAINT fk_knowledge_sync_outbox_submission FOREIGN KEY (submission_id)
+        REFERENCES knowledge_submissions (submission_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE learning_path (
@@ -60,6 +92,8 @@ CREATE TABLE learning_resource (
     title VARCHAR(255) NOT NULL,
     resource_type VARCHAR(50) NOT NULL,
     file_url VARCHAR(500),
+    graph_resource_id VARCHAR(100) NULL,
+    UNIQUE KEY uq_learning_resource_graph_id (graph_resource_id),
     FOREIGN KEY (concept_id) REFERENCES concept(concept_id)
 );
 
