@@ -7,6 +7,7 @@ const uploadRoute = require('./routes/upload');
 const authRoute = require('./routes/auth');
 const aiRoute = require('./routes/ai');
 const knowledgeGraphRoute = require('./routes/knowledgeGraph');
+const submissionsRoute = require('./routes/submissions');
 
 const app = express();
 
@@ -17,11 +18,23 @@ app.use('/api/upload', uploadRoute);
 app.use('/api/auth', authRoute);
 app.use('/api/ai', aiRoute);
 app.use('/api/kg', knowledgeGraphRoute);
+app.use('/api/submissions', submissionsRoute);
 
 app.get('/', (req, res) => {
     res.json({
         message: 'NeuroLearn backend is running'
     });
+});
+
+app.use((error, req, res, next) => {
+    if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
+        return res.status(400).json({
+            success: false,
+            message: 'Request body must contain valid JSON.'
+        });
+    }
+
+    return next(error);
 });
 
 module.exports = app;
