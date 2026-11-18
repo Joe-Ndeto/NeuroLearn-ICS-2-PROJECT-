@@ -2,14 +2,39 @@ CREATE TABLE learner (
     learner_id INT AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(100) NOT NULL UNIQUE,
     email VARCHAR(255) NOT NULL UNIQUE,
-    password_hash VARCHAR(255) NOT NULL
+    password_hash VARCHAR(255) NULL,
+    google_id VARCHAR(255) NULL,
+    role ENUM('student', 'admin') NOT NULL DEFAULT 'student',
+    UNIQUE KEY uq_learner_google_id (google_id)
 );
 
 CREATE TABLE concept (
     concept_id INT AUTO_INCREMENT PRIMARY KEY,
     concept_name VARCHAR(150) NOT NULL UNIQUE,
-    description TEXT
+    description TEXT,
+    graph_concept_id VARCHAR(100) NULL,
+    UNIQUE KEY uq_concept_graph_id (graph_concept_id)
 );
+
+CREATE TABLE knowledge_submissions (
+    submission_id INT NOT NULL AUTO_INCREMENT,
+    submission_type ENUM('CONCEPT', 'PREREQUISITE', 'RESOURCE') NOT NULL,
+    submission_data JSON NOT NULL,
+    status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+    submitted_by INT NOT NULL,
+    reviewed_by INT DEFAULT NULL,
+    review_notes TEXT,
+    submitted_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    reviewed_at TIMESTAMP NULL DEFAULT NULL,
+    PRIMARY KEY (submission_id),
+    KEY fk_submission_reviewer (reviewed_by),
+    KEY idx_submission_status (status),
+    KEY idx_submission_submitter (submitted_by),
+    CONSTRAINT fk_submission_reviewer FOREIGN KEY (reviewed_by)
+        REFERENCES learner (learner_id),
+    CONSTRAINT fk_submission_submitter FOREIGN KEY (submitted_by)
+        REFERENCES learner (learner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE learning_path (
     path_id INT AUTO_INCREMENT PRIMARY KEY,
