@@ -12,6 +12,7 @@ CREATE TABLE concept (
     concept_id INT AUTO_INCREMENT PRIMARY KEY,
     concept_name VARCHAR(150) NOT NULL UNIQUE,
     description TEXT,
+    difficulty_level VARCHAR(50) NULL,
     graph_concept_id VARCHAR(100) NULL,
     UNIQUE KEY uq_concept_graph_id (graph_concept_id)
 );
@@ -23,6 +24,22 @@ CREATE TABLE concept_course (
     PRIMARY KEY (concept_id, course_graph_id),
     KEY idx_concept_course_graph_id (course_graph_id),
     CONSTRAINT fk_concept_course_concept FOREIGN KEY (concept_id)
+        REFERENCES concept (concept_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE concept_prerequisite (
+    prerequisite_id INT AUTO_INCREMENT PRIMARY KEY,
+    prerequisite_concept_id INT NOT NULL,
+    target_concept_id INT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_concept_prerequisite_pair
+        (prerequisite_concept_id, target_concept_id),
+    KEY idx_concept_prerequisite_target (target_concept_id),
+    CONSTRAINT fk_concept_prerequisite_prerequisite
+        FOREIGN KEY (prerequisite_concept_id)
+        REFERENCES concept (concept_id),
+    CONSTRAINT fk_concept_prerequisite_target
+        FOREIGN KEY (target_concept_id)
         REFERENCES concept (concept_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
@@ -49,9 +66,12 @@ CREATE TABLE knowledge_submissions (
 CREATE TABLE knowledge_sync_outbox (
     outbox_id BIGINT NOT NULL AUTO_INCREMENT,
     submission_id INT NOT NULL,
+    canonical_record_type ENUM('CONCEPT', 'PREREQUISITE', 'RESOURCE') NOT NULL,
+    canonical_record_id INT NOT NULL,
     sync_status ENUM('pending', 'processing', 'completed', 'failed')
         NOT NULL DEFAULT 'pending',
     attempt_count INT UNSIGNED NOT NULL DEFAULT 0,
+    manual_retry_requested BOOLEAN NOT NULL DEFAULT FALSE,
     available_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     lease_expires_at DATETIME NULL,
     claim_token CHAR(36) NULL,

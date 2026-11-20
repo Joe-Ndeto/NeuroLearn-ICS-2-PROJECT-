@@ -2,11 +2,9 @@
 
 const express = require('express');
 const authenticateToken = require('../middleware/authenticateToken');
-const {
-    createPendingSubmission,
-    getLearnerSubmissions,
-    resolveConceptReference
-} = require('../services/knowledgeSubmissionService');
+const path = require('path');
+const { upload: uploadResourceDocument, uploadFolder, validateDocument, removeUploadedFile, maxFileSize } = require('../middleware/resourceDocumentUpload');
+const { createPendingSubmission, getLearnerSubmissions } = require('../services/knowledgeSubmissionService');
 
 const router = express.Router();
 const CONTROL_FIELDS = [
@@ -98,31 +96,6 @@ function requiredText(body, field, maxLength, res) {
     return body[field].trim();
 }
 
-function conceptReference(body, field, res) {
-    const value = body[field];
-    const numericValue = typeof value === 'string' && /^[1-9]\d*$/.test(value)
-        ? Number(value)
-        : value;
-
-    if (
-        (typeof numericValue === 'number' &&
-            (!Number.isSafeInteger(numericValue) || numericValue < 1)) ||
-        (typeof numericValue === 'string' &&
-            (!numericValue.trim() || numericValue.trim().length > 100)) ||
-        (typeof numericValue !== 'number' && typeof numericValue !== 'string')
-    ) {
-        res.status(400).json({
-            success: false,
-            message: `${field} must be a positive concept ID or graph concept ID.`
-        });
-        return null;
-    }
-
-    return typeof numericValue === 'string'
-        ? numericValue.trim()
-        : numericValue;
-}
-
 function validatePage(value, fallback, maximum) {
     if (value === undefined) {
         return fallback;
@@ -167,18 +140,9 @@ router.post('/concepts', async (req, res) => {
     const description = optionalText(req.body, 'description', 5000, res);
     if (description === null) return;
 
-    const difficultyLevel = optionalText(
-        req.body,
-        'difficultyLevel',
-        50,
-        res
-    );
-    if (difficultyLevel === null) return;
-
     return saveSubmission(req, res, 'CONCEPT', {
         name,
-        description,
-        difficultyLevel
+        description
     });
 });
 
@@ -187,98 +151,88 @@ router.post('/prerequisites', async (req, res) => {
         return;
     }
 
-    const prerequisiteId = conceptReference(req.body, 'prerequisiteId', res);
-    if (prerequisiteId === null) return;
+    return res.status(410).json({
+        success: false,
+        message: 'Prerequisite relationships are managed by administrators.'
+    });
 
-    const targetId = conceptReference(req.body, 'targetId', res);
-    if (targetId === null) return;
+});
+
+router.post('/resources', (req, res, next) => {
+    if (!requireStudent(req, res)) return;
+    uploadResourceDocument.single('document')(req, res, error => {
+        if (error) return res.status(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({
+            success: false,
+            message: error.code === 'LIMIT_FILE_SIZE'
+                ? `Document size must not exceed ${Math.floor(maxFileSize / 1024 / 1024)} MB.`
+                : error.message
+        });
+        next();
+    });
+}, async (req, res) => {
+    const fail = async (status, message) => {
+        await removeUploadedFile(req.file).catch(error => console.error('[Submissions] Temporary upload cleanup failed:', error.message));
+        return res.status(status).json({ success: false, message });
+    };
+    if (!validateBody(req, res)) {
+        await removeUploadedFile(req.file).catch(() => {});
+        return;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'conceptId')) {
+        return fail(400, 'The resource concept is assigned by an administrator during review.');
+    }
+    if (!req.file) return res.status(400).json({ success: false, message: 'Please select a PDF, PowerPoint or Word document.' });
+    try {
+        await validateDocument(req.file);
+    } catch (error) {
+        return fail(400, error.message);
+    }
+
+    const title = requiredText(req.body, 'title', 255, res);
+    if (title === null) { await removeUploadedFile(req.file); return; }
+
+    const extension = path.extname(req.file.originalname).toLowerCase();
+    const documentType = ['.ppt', '.pptx'].includes(extension) ? 'PowerPoint' : ['.doc', '.docx'].includes(extension) ? 'Word' : 'PDF';
 
     try {
-        const prerequisite = await resolveConceptReference(prerequisiteId);
-        const target = await resolveConceptReference(targetId);
-
-        if (!prerequisite || !target) {
-            return res.status(400).json({
-                success: false,
-                message: 'Both concepts must exist before proposing a prerequisite.'
-            });
-        }
-
-        if (prerequisite.concept_id === target.concept_id) {
-            return res.status(400).json({
-                success: false,
-                message: 'A concept cannot be its own prerequisite.'
-            });
-        }
-
-        return saveSubmission(req, res, 'PREREQUISITE', {
-            prerequisiteId,
-            targetId
-        });
+        const storedName = path.basename(req.file.filename);
+        const submission = await createPendingSubmission('RESOURCE', {
+            title,
+            type: 'document',
+            document: {
+                filename: storedName,
+                originalName: path.basename(req.file.originalname).slice(0, 255),
+                extension,
+                documentType,
+                size: req.file.size
+            }
+        }, req.user.learner_id);
+        return res.status(201).json({ success: true, submission });
     } catch (error) {
-        console.error('[Submissions] Could not validate concepts:', error.message);
-        return res.status(500).json({
-            success: false,
-            message: 'Could not validate the concepts.'
-        });
+        console.error('[Submissions] Could not validate resource concept:', error.message);
+        return fail(500, 'Could not save the resource submission.');
     }
 });
 
-router.post('/resources', async (req, res) => {
-    if (!requireStudent(req, res) || !validateBody(req, res)) {
-        return;
-    }
-
-    const conceptId = conceptReference(req.body, 'conceptId', res);
-    if (conceptId === null) return;
-
-    const title = requiredText(req.body, 'title', 255, res);
-    if (title === null) return;
-
-    const type = requiredText(req.body, 'type', 50, res);
-    if (type === null) return;
-
-    const url = requiredText(req.body, 'url', 500, res);
-    if (url === null) return;
-
-    let parsedUrl;
+router.get('/resources/:submissionId/document', async (req, res) => {
+    const submissionId = Number(req.params.submissionId);
+    if (!Number.isSafeInteger(submissionId) || submissionId < 1) return res.status(400).json({ success: false, message: 'Invalid submission ID.' });
     try {
-        parsedUrl = new URL(url);
-    } catch {
-        return res.status(400).json({
-            success: false,
-            message: 'url must be a valid HTTP or HTTPS URL.'
-        });
-    }
-
-    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-        return res.status(400).json({
-            success: false,
-            message: 'url must be a valid HTTP or HTTPS URL.'
-        });
-    }
-
-    try {
-        const concept = await resolveConceptReference(conceptId);
-        if (!concept) {
-            return res.status(400).json({
-                success: false,
-                message: 'The resource concept must already exist.'
-            });
-        }
-
-        return saveSubmission(req, res, 'RESOURCE', {
-            conceptId,
-            title,
-            type,
-            url: parsedUrl.toString()
-        });
+        const [rows] = await require('../config/mysql').execute(
+            `SELECT submitted_by, submission_data FROM knowledge_submissions
+             WHERE submission_id = ? AND submission_type = 'RESOURCE'`, [submissionId]
+        );
+        if (!rows.length) return res.status(404).json({ success: false, message: 'Document not found.' });
+        if (req.user.role !== 'admin' && Number(rows[0].submitted_by) !== Number(req.user.learner_id)) return res.status(403).json({ success: false, message: 'You are not allowed to access this document.' });
+        const data = typeof rows[0].submission_data === 'string' ? JSON.parse(rows[0].submission_data) : rows[0].submission_data;
+        const filename = data?.document?.filename;
+        if (typeof filename !== 'string' || !/^[0-9a-f-]{36}\.(pdf|ppt|pptx|doc|docx)$/i.test(filename)) return res.status(404).json({ success: false, message: 'Document not found.' });
+        const fullPath = path.join(uploadFolder, filename);
+        return res.download(fullPath, data.document.originalName || 'learning-resource');
     } catch (error) {
-        console.error('[Submissions] Could not validate resource concept:', error.message);
-        return res.status(500).json({
-            success: false,
-            message: 'Could not validate the resource concept.'
-        });
+        if (error.code === 'ENOENT') return res.status(404).json({ success: false, message: 'Document not found.' });
+        console.error('[Submissions] Could not retrieve resource document:', error.message);
+        return res.status(500).json({ success: false, message: 'Could not retrieve the document.' });
     }
 });
 

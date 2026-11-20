@@ -7,11 +7,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard - NeuroLearn</title>
     <link rel="stylesheet" href="dashboard.css">
+    <link rel="stylesheet" href="loading-spinner.css">
 </head>
 
 <body>
+    <p class="page-session-message nl-loading-indicator" id="dashboard-session-message" role="status" aria-label="Loading" aria-busy="true">
+        <span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading</span>
+    </p>
 
-    <header>
+    <header id="student-header" hidden>
         <div class="logo-area">
             <div class="logo-icon">🧠</div>
             <span>NeuroLearn</span>
@@ -36,7 +40,7 @@
         </div>
     </header>
 
-    <div class="main-container">
+    <div class="main-container" id="student-dashboard-content" hidden>
 
         <div class="subheader">
             <div class="ai-badge">YOUR LEARNING JOURNEY</div>
@@ -140,6 +144,80 @@
             </div>
 
         </div>
+
+        <section class="knowledge-contributions" id="knowledge-contributions" hidden
+            aria-labelledby="knowledge-contributions-title">
+            <div class="section-title" id="knowledge-contributions-title">Database Concepts</div>
+            <p class="section-subtitle">
+                Suggest Database Concepts or share learning documents. An administrator reviews every contribution before it is approved.
+            </p>
+
+            <div class="contribution-grid">
+                <form class="contribution-card" id="concept-submission-form" novalidate>
+                    <h2>Suggest a Database Concept</h2>
+                    <p class="contribution-help">Propose a new concept in the Database Concepts subject area. Administrator approval is required.</p>
+
+                    <label for="concept-name">Concept name <span aria-hidden="true">*</span></label>
+                    <input id="concept-name" name="name" type="text" maxlength="150" required>
+
+                    <label for="concept-description">Description</label>
+                    <textarea id="concept-description" name="description" maxlength="5000" rows="4"></textarea>
+
+                    <button class="btn-primary contribution-submit" type="submit">Submit concept</button>
+                    <p class="contribution-feedback" id="concept-submission-feedback"
+                        role="status" aria-live="polite"></p>
+                </form>
+
+                <form class="contribution-card" id="resource-submission-form" novalidate>
+                    <h2>Submit a learning resource</h2>
+                    <p class="contribution-help">Upload a learning document for administrators to associate with an approved Database Concept. Administrator approval is required.</p>
+
+                    <label for="resource-title">Resource title <span aria-hidden="true">*</span></label>
+                    <input id="resource-title" name="title" type="text" maxlength="255" required>
+
+                    <label for="resource-file">Learning document <span aria-hidden="true">*</span></label>
+                    <input id="resource-file" name="document" type="file" required
+                        accept=".pdf,.ppt,.pptx,.doc,.docx,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        aria-describedby="resource-file-help resource-file-name">
+                    <p class="contribution-help" id="resource-file-help">Upload a PDF, PowerPoint or Word document. Maximum size: 10 MB.</p>
+                    <p id="resource-file-name" role="status" aria-live="polite">No document selected.</p>
+                    <button class="btn-outline" id="resource-file-remove" type="button" hidden>Remove selected document</button>
+
+                    <button class="btn-primary contribution-submit" type="submit" disabled>Submit resource</button>
+                    <p class="contribution-feedback" id="resource-submission-feedback"
+                        role="status" aria-live="polite"></p>
+                </form>
+
+            </div>
+        </section>
+
+        <section class="submission-history" id="submission-history" hidden
+            aria-labelledby="submission-history-title">
+            <div class="submission-history-heading">
+                <div>
+                    <div class="section-title" id="submission-history-title">My Knowledge Submissions</div>
+                    <p class="section-subtitle">
+                        Track administrator review decisions for your contributions. Review status is separate from any later knowledge synchronization.
+                    </p>
+                </div>
+                <button class="btn-outline" id="submission-history-refresh" type="button">Refresh history</button>
+            </div>
+
+            <p class="submission-history-message nl-loading-indicator" id="submission-history-loading"
+                role="status" aria-label="Loading" aria-busy="true" hidden><span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading</span></p>
+            <p class="submission-history-message submission-history-error" id="submission-history-error"
+                role="alert" hidden></p>
+            <p class="submission-history-message" id="submission-history-empty" role="status" hidden>
+                You have not submitted any knowledge contributions yet.
+            </p>
+            <div class="submission-history-list" id="submission-history-list" aria-live="polite"></div>
+
+            <nav class="submission-history-pagination" aria-label="Submission history pages">
+                <button class="btn-outline" id="submission-history-previous" type="button" disabled>Previous</button>
+                <span id="submission-history-pagination" data-total-pages="0" data-total="0" aria-live="polite"></span>
+                <button class="btn-outline" id="submission-history-next" type="button" disabled>Next</button>
+            </nav>
+        </section>
 
         <div style="margin-bottom: 40px;">
             <div class="section-title">Start Learning</div>
@@ -311,6 +389,10 @@
 
     </div>
 
+    <script src="config.js" defer></script>
+    <script src="api.js" defer></script>
+    <script src="loading-spinner.js" defer></script>
+    <script src="role-routing.js" defer></script>
     <script src="dashboard.js" defer></script>
 </body>
 

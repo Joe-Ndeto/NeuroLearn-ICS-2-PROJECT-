@@ -1,66 +1,16 @@
 
 'use strict';
 
-const API_BASE_URL = 'http://localhost:5000/api';
+const api = window.NeuroLearnApi;
 
-const storedLearner = sessionStorage.getItem('neurolearnLearner');
-const storedToken = sessionStorage.getItem('neurolearnToken');
-
-let learner = null;
+let learner = api.getCachedLearner();
 let documents = [];
 let selectedDocumentId = null;
 let isUploading = false;
+let isLoadingDocuments = false;
 let isGeneratingSummary = false;
 let isSendingMessage = false;
 let isGeneratingQuiz = false;
-
-// Send the JWT with every protected API request.
-async function authenticatedFetch(url, options = {}) {
-    const token = sessionStorage.getItem('neurolearnToken');
-
-    if (!token) {
-        sessionStorage.removeItem('neurolearnLearner');
-        sessionStorage.removeItem('neurolearnToken');
-        window.location.replace('login_signup.html');
-        throw new Error('Your session has expired. Please sign in again.');
-    }
-
-    const headers = new Headers(options.headers || {});
-    headers.set('Authorization', `Bearer ${token}`);
-
-    const response = await fetch(url, {
-        ...options,
-        headers
-    });
-
-    if (response.status === 401) {
-        sessionStorage.removeItem('neurolearnLearner');
-        sessionStorage.removeItem('neurolearnToken');
-        window.location.replace('login_signup.html');
-    }
-
-    return response;
-}
-
-if (!storedLearner || !storedToken) {
-    window.location.replace('login_signup.html');
-} else {
-    try {
-        learner = JSON.parse(storedLearner);
-
-        if (
-            !learner ||
-            !Number.isInteger(Number(learner.learner_id))
-        ) {
-            throw new Error('Learner information is missing or invalid.');
-        }
-    } catch (error) {
-        console.error('Could not load learner information:', error);
-        sessionStorage.removeItem('neurolearnLearner');
-        sessionStorage.removeItem('neurolearnToken');
-        window.location.replace('login_signup.html');
-    }
-}
 
 const $ = id => document.getElementById(id);
 
@@ -93,38 +43,20 @@ if (learnerName && learner) {
 
 if (logoutButton) {
     logoutButton.addEventListener('click', () => {
-        sessionStorage.removeItem('neurolearnLearner');
-        sessionStorage.removeItem('neurolearnToken');
-        window.location.replace('login_signup.html');
+        api.clearSession();
     });
 }
 
-function setDocumentStatus(message) {
+function setDocumentStatus(message, loading = false) {
     if (documentStatus) {
-        documentStatus.textContent = message;
+        if (loading && window.NeuroLearnLoading?.showIndicator) {
+            window.NeuroLearnLoading.showIndicator(documentStatus, 'Loading study workspace');
+        } else if (window.NeuroLearnLoading?.showMessage) {
+            window.NeuroLearnLoading.showMessage(documentStatus, message);
+        } else {
+            documentStatus.textContent = message;
+        }
     }
-}
-
-async function readResponse(response) {
-    let data;
-
-    try {
-        data = await response.json();
-    } catch {
-        throw new Error(
-            `The server returned an invalid response (${response.status}).`
-        );
-    }
-
-    if (!response.ok) {
-        throw new Error(
-            data.error ||
-            data.message ||
-            `Request failed with status ${response.status}.`
-        );
-    }
-
-    return data;
 }
 
 function normalizeDocument(item) {
@@ -264,11 +196,13 @@ function selectDocument(item) {
 }
 
 async function loadDocuments(options = {}) {
-    setDocumentStatus('Loading your documents...');
+    if (isLoadingDocuments) return;
+    isLoadingDocuments = true;
+    window.NeuroLearnLoading?.setButtonLoading(refreshButton, true, 'Refreshing documents');
+    setDocumentStatus('', true);
 
     try {
-        const response = await authenticatedFetch(`${API_BASE_URL}/upload`);
-        const data = await readResponse(response);
+        const data = await api.get('/upload');
 
         documents = (
             Array.isArray(data) ? data : data.documents || []
@@ -321,7 +255,11 @@ async function loadDocuments(options = {}) {
         setDocumentStatus(`${documents.length} document(s) loaded.`);
     } catch (error) {
         console.error('Document loading failed:', error);
+        documentList?.replaceChildren();
         setDocumentStatus(`Could not load documents: ${error.message}`);
+    } finally {
+        isLoadingDocuments = false;
+        window.NeuroLearnLoading?.setButtonLoading(refreshButton, false);
     }
 }
 
@@ -358,20 +296,11 @@ if (uploadButton && fileInput) {
         formData.append('document', file);
 
         isUploading = true;
-        uploadButton.disabled = true;
-        uploadButton.textContent = 'Uploading...';
-
-        setDocumentStatus(
-            'Uploading and processing your document. Please wait...'
-        );
+        window.NeuroLearnLoading?.setButtonLoading(uploadButton, true, 'Uploading document');
+        setDocumentStatus('', true);
 
         try {
-            const response = await authenticatedFetch(`${API_BASE_URL}/upload`, {
-                method: 'POST',
-                body: formData
-            });
-
-            const data = await readResponse(response);
+            const data = await api.post('/upload', formData);
 
             const newId =
                 data.file?.documentId ??
@@ -399,8 +328,8 @@ if (uploadButton && fileInput) {
             setDocumentStatus(`Upload failed: ${error.message}`);
         } finally {
             isUploading = false;
-            uploadButton.disabled = false;
-            uploadButton.textContent = 'Upload Selected File';
+            window.NeuroLearnLoading?.setButtonLoading(uploadButton, false);
+            if (!window.NeuroLearnLoading) uploadButton.disabled = false;
         }
     });
 }
@@ -458,35 +387,26 @@ async function generateDocumentSummary() {
     ].filter(Boolean);
 
     buttons.forEach(button => {
-        button.disabled = true;
-        button.textContent = 'Generating...';
+        window.NeuroLearnLoading?.setButtonLoading(button, true, 'Generating summary');
     });
 
     if (summaryResult) {
-        summaryResult.textContent =
-            `Generating a summary of "${selected.filename}". Please wait...`;
+        if (window.NeuroLearnLoading?.showIndicator) window.NeuroLearnLoading.showIndicator(summaryResult, 'Generating document summary');
     }
 
-    setDocumentStatus(
-        'NeuroLearn is generating your summary with Gemini...'
-    );
+    setDocumentStatus('', true);
 
     try {
-        const response = await authenticatedFetch(`${API_BASE_URL}/ai/summarize`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                documentId: Number(selectedDocumentId)
-            })
+        const data = await api.post('/ai/summarize', {
+            documentId: Number(selectedDocumentId)
         });
-
-        const data = await readResponse(response);
 
         if (typeof data.summary !== 'string' || !data.summary.trim()) {
             throw new Error('The server returned an empty summary.');
         }
 
         if (summaryResult) {
+            window.NeuroLearnLoading?.showMessage(summaryResult, '');
             summaryResult.innerHTML = formatSummary(data.summary);
         }
 
@@ -495,8 +415,9 @@ async function generateDocumentSummary() {
         console.error('Summary generation failed:', error);
 
         if (summaryResult) {
-            summaryResult.textContent =
-                `Could not generate summary: ${error.message}`;
+            const message = `Could not generate summary: ${error.message}`;
+            if (window.NeuroLearnLoading?.showMessage) window.NeuroLearnLoading.showMessage(summaryResult, message);
+            else summaryResult.textContent = message;
         }
 
         setDocumentStatus(`Summary failed: ${error.message}`);
@@ -504,13 +425,11 @@ async function generateDocumentSummary() {
         isGeneratingSummary = false;
 
         if (summaryButton) {
-            summaryButton.disabled = false;
-            summaryButton.textContent = 'Summarize';
+            window.NeuroLearnLoading?.setButtonLoading(summaryButton, false);
         }
 
         if (panelSummaryButton) {
-            panelSummaryButton.disabled = false;
-            panelSummaryButton.textContent = 'Generate Summary';
+            window.NeuroLearnLoading?.setButtonLoading(panelSummaryButton, false);
         }
     }
 }
@@ -566,8 +485,8 @@ async function sendChatMessage(message) {
     isSendingMessage = true;
 
     if (sendButton) {
-        // Keep the send icon visible while preventing duplicate submissions.
-        sendButton.disabled = true;
+        window.NeuroLearnLoading?.setButtonLoading(sendButton, true, 'Sending message');
+        if (!window.NeuroLearnLoading) sendButton.disabled = true;
     }
 
     appendChatMessage(question, 'user');
@@ -576,31 +495,25 @@ async function sendChatMessage(message) {
         chatInput.value = '';
     }
 
-    const loading = appendChatMessage(
-        'Reading your notes and preparing an answer...',
-        'ai'
-    );
+    const loading = appendChatMessage('', 'ai');
+    const loadingParagraph = loading?.querySelector('p');
+    if (loadingParagraph && window.NeuroLearnLoading?.showIndicator) window.NeuroLearnLoading.showIndicator(loadingParagraph, 'Preparing an AI answer');
 
-    setDocumentStatus('NeuroLearn is answering your question...');
+    setDocumentStatus('', true);
 
     try {
-        const response = await authenticatedFetch(`${API_BASE_URL}/ai/chat`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                documentId: Number(selectedDocumentId),
-                message: question
-            })
+        const data = await api.post('/ai/chat', {
+            documentId: Number(selectedDocumentId),
+            message: question
         });
-
-        const data = await readResponse(response);
 
         if (typeof data.answer !== 'string' || !data.answer.trim()) {
             throw new Error('The server returned an empty answer.');
         }
 
         if (loading) {
-            loading.querySelector('p').textContent = data.answer;
+            if (window.NeuroLearnLoading?.showMessage) window.NeuroLearnLoading.showMessage(loadingParagraph, data.answer);
+            else loadingParagraph.textContent = data.answer;
         }
 
         if (
@@ -649,8 +562,9 @@ async function sendChatMessage(message) {
         console.error('Chat request failed:', error);
 
         if (loading) {
-            loading.querySelector('p').textContent =
-                `Sorry, I could not answer that: ${error.message}`;
+            const message = `Sorry, I could not answer that: ${error.message}`;
+            if (window.NeuroLearnLoading?.showMessage) window.NeuroLearnLoading.showMessage(loadingParagraph, message);
+            else loadingParagraph.textContent = message;
         }
 
         setDocumentStatus(`Chat failed: ${error.message}`);
@@ -658,8 +572,8 @@ async function sendChatMessage(message) {
         isSendingMessage = false;
 
         if (sendButton) {
-            // Re-enable the button without changing its send icon.
-            sendButton.disabled = false;
+            window.NeuroLearnLoading?.setButtonLoading(sendButton, false);
+            if (!window.NeuroLearnLoading) sendButton.disabled = false;
         }
 
         if (chatMessages) {
@@ -792,27 +706,15 @@ function renderQuiz(quizId, questions) {
             })
         );
 
-        submit.disabled = true;
-        submit.textContent = 'Saving results...';
-
-        setDocumentStatus(
-            'Saving your quiz results and updating concept mastery...'
-        );
+        window.NeuroLearnLoading?.setButtonLoading(submit, true, 'Saving quiz results');
+        if (!window.NeuroLearnLoading) submit.disabled = true;
+        setDocumentStatus('', true);
 
         try {
-            const response = await authenticatedFetch(
-                `${API_BASE_URL}/ai/quiz/submit`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        quizId,
-                        answers
-                    })
-                }
-            );
-
-            const result = await readResponse(response);
+            const result = await api.post('/ai/quiz/submit', {
+                quizId,
+                answers
+            });
 
             const reviewContainer = document.createElement('div');
             reviewContainer.className = 'quiz-review-container';
@@ -897,8 +799,11 @@ function renderQuiz(quizId, questions) {
                 `Your results could not be saved: ${error.message}. Your quiz answers may still be available; try submitting again only if the quiz has not expired.`;
 
             form.prepend(message);
-            submit.disabled = false;
+            window.NeuroLearnLoading?.setButtonLoading(submit, false);
             submit.textContent = 'Retry Saving Answers';
+            if (!window.NeuroLearnLoading) {
+                submit.disabled = false;
+            }
 
             setDocumentStatus(`Quiz save failed: ${error.message}`);
         }
@@ -931,33 +836,20 @@ async function generateDocumentQuiz() {
     ].filter(Boolean);
 
     buttons.forEach(button => {
-        button.disabled = true;
-        button.textContent = 'Generating quiz...';
+        window.NeuroLearnLoading?.setButtonLoading(button, true, 'Generating quiz');
     });
 
     if (quizResult) {
-        quizResult.replaceChildren();
-
-        const paragraph = document.createElement('p');
-        paragraph.textContent =
-            `Generating ${questionCount} questions from "${selected.filename}". Please wait...`;
-
-        quizResult.appendChild(paragraph);
+        if (window.NeuroLearnLoading?.showIndicator) window.NeuroLearnLoading.showIndicator(quizResult, 'Generating quiz questions');
     }
 
-    setDocumentStatus('NeuroLearn is generating your quiz...');
+    setDocumentStatus('', true);
 
     try {
-        const response = await authenticatedFetch(`${API_BASE_URL}/ai/quiz`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                documentId: Number(selectedDocumentId),
-                questionCount
-            })
+        const data = await api.post('/ai/quiz', {
+            documentId: Number(selectedDocumentId),
+            questionCount
         });
-
-        const data = await readResponse(response);
 
         if (
             typeof data.quizId !== 'string' ||
@@ -967,6 +859,7 @@ async function generateDocumentQuiz() {
             throw new Error('The server returned an invalid quiz.');
         }
 
+        window.NeuroLearnLoading?.showMessage(quizResult, '');
         renderQuiz(data.quizId, data.questions);
 
         setDocumentStatus(
@@ -977,6 +870,8 @@ async function generateDocumentQuiz() {
 
         if (quizResult) {
             quizResult.replaceChildren();
+            quizResult.classList?.remove('nl-loading-indicator', 'nl-loading-indicator--section');
+            quizResult.setAttribute('aria-busy', 'false');
 
             const paragraph = document.createElement('p');
             paragraph.textContent =
@@ -990,13 +885,11 @@ async function generateDocumentQuiz() {
         isGeneratingQuiz = false;
 
         if (generateQuizButton) {
-            generateQuizButton.disabled = false;
-            generateQuizButton.textContent = 'Generate Quiz';
+            window.NeuroLearnLoading?.setButtonLoading(generateQuizButton, false);
         }
 
         if (openQuizButton) {
-            openQuizButton.disabled = false;
-            openQuizButton.textContent = 'Generate Quiz';
+            window.NeuroLearnLoading?.setButtonLoading(openQuizButton, false);
         }
     }
 }
@@ -1036,21 +929,11 @@ document.querySelectorAll('.study-tab').forEach(button => {
 // Confirm the learner identity with the backend before loading private data.
 async function initializeStudyWorkspace() {
     try {
-        const response = await authenticatedFetch(
-            `${API_BASE_URL}/auth/me`
-        );
+        learner = await api.validateSession();
 
-        const data = await readResponse(response);
-
-        if (!data.learner || !data.learner.learner_id) {
+        if (!learner.learner_id) {
             throw new Error('The server did not return a valid learner account.');
         }
-
-        learner = data.learner;
-        sessionStorage.setItem(
-            'neurolearnLearner',
-            JSON.stringify(learner)
-        );
 
         if (learnerName) {
             learnerName.textContent =
@@ -1061,14 +944,10 @@ async function initializeStudyWorkspace() {
     } catch (error) {
         console.error('Study workspace initialization failed:', error);
 
-        if (sessionStorage.getItem('neurolearnToken')) {
-            setDocumentStatus(
-                `Could not initialize your study workspace: ${error.message}`
-            );
-        }
+        setDocumentStatus(api.hasToken()
+            ? 'Could not verify your session. Check your connection and try again.'
+            : 'Sign in to open your study workspace.');
     }
 }
 
-if (learner && storedToken) {
-    initializeStudyWorkspace();
-}
+initializeStudyWorkspace();

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="../../../frontend/loading-spinner.css">
+    <script src="../../../frontend/loading-spinner.js" defer></script>
+    <title>NeuroLearn spinner browser check</title>
+</head>
+<body>
+    <button id="submit" type="button">Submit</button>
+    <p id="status" role="status"></p>
+    <pre id="result">Running</pre>
+    <script>
+        window.addEventListener('load', () => {
+            const button = document.getElementById('submit');
+            const status = document.getElementById('status');
+            const result = document.getElementById('result');
+            try {
+                NeuroLearnLoading.setButtonLoading(button, true, 'Submitting resource');
+                if (!button.disabled || !button.querySelector('.nl-spinner--small') || button.getAttribute('aria-busy') !== 'true') {
+                    throw new Error('Button spinner state was not applied.');
+                }
+                const spinnerStyle = getComputedStyle(button.querySelector('.nl-spinner--small'));
+                const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+                if (reducedMotion ? spinnerStyle.animationName !== 'none' : spinnerStyle.animationName !== 'nl-spinner-rotate') {
+                    throw new Error('Spinner animation does not match the motion preference.');
+                }
+                NeuroLearnLoading.showIndicator(status, 'Loading submissions');
+                if (!status.querySelector('.nl-spinner') || status.getAttribute('aria-busy') !== 'true') {
+                    throw new Error('Section spinner state was not applied.');
+                }
+                window.setTimeout(() => {
+                    NeuroLearnLoading.showMessage(status, 'Submission loaded.');
+                    NeuroLearnLoading.setButtonLoading(button, false);
+                    if (status.querySelector('.nl-spinner') || status.getAttribute('aria-busy') !== 'false' || button.disabled) {
+                        result.textContent = 'FAILED: success did not clear spinner';
+                        return;
+                    }
+                    NeuroLearnLoading.showIndicator(status, 'Loading submission details');
+                    NeuroLearnLoading.showMessage(status, 'The request failed safely.');
+                    if (status.querySelector('.nl-spinner') || status.textContent !== 'The request failed safely.') {
+                        result.textContent = 'FAILED: failure did not clear spinner';
+                        return;
+                    }
+                    result.textContent = 'PASSED';
+                    document.documentElement.dataset.browserTest = 'passed';
+                }, 50);
+            } catch (error) {
+                result.textContent = `FAILED: ${error.message}`;
+            }
+        });
+    </script>
+</body>
+</html>

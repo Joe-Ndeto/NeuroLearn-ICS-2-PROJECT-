@@ -1,0 +1,60 @@
+.nl-spinner {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    flex: 0 0 auto;
+    border: 0.16em solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: nl-spinner-rotate 0.75s linear infinite;
+    vertical-align: -0.15em;
+}
+
+.nl-spinner--small {
+    width: 0.9em;
+    height: 0.9em;
+    border-width: 0.14em;
+}
+
+.nl-loading-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.65rem;
+    color: inherit;
+}
+
+.nl-loading-indicator--section {
+    min-height: 3rem;
+}
+
+.nl-loading-indicator[hidden] {
+    display: none;
+}
+
+.nl-button-spinner-content {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+.nl-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+@keyframes nl-spinner-rotate {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .nl-spinner { animation: none; }
+}

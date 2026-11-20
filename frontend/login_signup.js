@@ -1,8 +1,17 @@
 
-const API_URL = 'http://localhost:5000/api/auth';
+const api = window.NeuroLearnApi;
 
 const GOOGLE_CLIENT_ID =
     '1019813293146-e10qgtk8iubmr79gamtq773acu37hie4.apps.googleusercontent.com';
+
+let authPending = false;
+let googleAuthPending = false;
+
+function setAuthMessage(message) {
+    const element = document.getElementById('auth-message');
+    if (window.NeuroLearnLoading?.showMessage) window.NeuroLearnLoading.showMessage(element, message);
+    else element.textContent = message;
+}
 
 function switchTab(tabName) {
     document.querySelectorAll('.tab').forEach(tab => {
@@ -22,71 +31,61 @@ function switchTab(tabName) {
         isLogin ? 'login-form' : 'signup-form'
     ).classList.add('active');
 
-    document.getElementById('auth-message').textContent = '';
+    setAuthMessage('');
 }
 
 // Store learner information and JWT after successful authentication.
-function completeLogin(learner, token) {
+async function completeLogin(learner, token) {
     if (!learner || !token) {
         throw new Error(
             'Login response is missing learner information or authentication token.'
         );
     }
 
-    sessionStorage.setItem(
-        'neurolearnLearner',
-        JSON.stringify(learner)
-    );
-
-    sessionStorage.setItem(
-        'neurolearnToken',
-        token
-    );
-
-    window.location.href = new URL(
-        'dashboard.html',
-        window.location.href
-    ).href;
+    api.setSession({ learner, token });
+    const result = await window.NeuroLearnRoleRouting.validateAndRoute({
+        api,
+        location: window.location,
+        onUnavailable(message) {
+            setAuthMessage(message);
+        }
+    });
+    if (!result.ok && result.reason === 'unsupported_role') {
+        document.getElementById('auth-message').textContent = 'This account does not have a supported NeuroLearn role.';
+    }
 }
 
 // Handle email/password authentication.
 async function sendAuthRequest(endpoint, data) {
+    if (authPending || googleAuthPending) return;
+    authPending = true;
     const message = document.getElementById('auth-message');
-    message.textContent = 'Please wait...';
+    const form = document.getElementById(endpoint === 'signup' ? 'signup-form' : 'login-form');
+    const submitButton = form.querySelector('button[type="submit"]');
+    window.NeuroLearnLoading?.setButtonLoading(submitButton, true, endpoint === 'signup' ? 'Creating account' : 'Signing in');
+    if (window.NeuroLearnLoading?.showIndicator) window.NeuroLearnLoading.showIndicator(message, endpoint === 'signup' ? 'Creating account' : 'Signing in');
 
     try {
-        const response = await fetch(`${API_URL}/${endpoint}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(data)
-        });
-
-        const result = await response.json();
-
-        if (!response.ok) {
-            throw new Error(
-                result.error || 'Authentication request failed.'
-            );
-        }
+        const result = await api.post(`/auth/${endpoint}`, data, { auth: false });
 
         if (endpoint === 'signup') {
             document.getElementById('signup-form').reset();
 
             switchTab('login');
 
-            message.textContent =
-                'Account created successfully! Please log in.';
+            setAuthMessage('Account created successfully! Please log in.');
 
             return;
         }
 
-        completeLogin(result.learner, result.token);
+        await completeLogin(result.learner, result.token);
 
     } catch (error) {
-        message.textContent = error.message;
-        console.error('Authentication error:', error);
+        setAuthMessage(error.message);
+        console.error('Authentication request failed.', { status: error.status || 0 });
+    } finally {
+        authPending = false;
+        window.NeuroLearnLoading?.setButtonLoading(submitButton, false);
     }
 }
 
@@ -94,44 +93,32 @@ async function sendAuthRequest(endpoint, data) {
 window.handleGoogleCredentialResponse = async function (response) {
     const message = document.getElementById('auth-message');
 
+    if (googleAuthPending || authPending) return;
+
     if (!response || !response.credential) {
-        message.textContent =
-            'Google did not return a sign-in credential.';
+        setAuthMessage('Google did not return a sign-in credential.');
         return;
     }
 
-    message.textContent = 'Signing in with Google...';
+    googleAuthPending = true;
+    if (window.NeuroLearnLoading?.showIndicator) window.NeuroLearnLoading.showIndicator(message, 'Signing in with Google');
 
     try {
         const result = await sendGoogleRequest(response.credential);
 
-        completeLogin(result.learner, result.token);
+        await completeLogin(result.learner, result.token);
 
     } catch (error) {
-        message.textContent = error.message;
+        setAuthMessage(error.message);
         console.error('Google authentication error:', error);
+    } finally {
+        googleAuthPending = false;
     }
 };
 
 // Send Google's verified credential to the backend.
 async function sendGoogleRequest(credential) {
-    const response = await fetch(`${API_URL}/google`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ credential })
-    });
-
-    const result = await response.json();
-
-    if (!response.ok) {
-        throw new Error(
-            result.error || 'Google authentication failed.'
-        );
-    }
-
-    return result;
+    return api.post('/auth/google', { credential }, { auth: false });
 }
 
 // Render separate Google buttons for Login and Sign Up.
@@ -211,8 +198,7 @@ document.getElementById('signup-form').addEventListener(
             .value;
 
         if (password !== confirmPassword) {
-            document.getElementById('auth-message').textContent =
-                'Passwords do not match.';
+            setAuthMessage('Passwords do not match.');
             return;
         }
 
