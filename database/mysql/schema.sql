@@ -101,8 +101,10 @@ CREATE TABLE learning_path (
 CREATE TABLE assessment (
     assessment_id INT AUTO_INCREMENT PRIMARY KEY,
     learner_id INT NOT NULL,
+    quiz_attempt_id CHAR(36) NULL,
     assessment_date DATETIME DEFAULT CURRENT_TIMESTAMP,
     overall_score DECIMAL(5,2) NOT NULL,
+    UNIQUE KEY uq_assessment_quiz_attempt (quiz_attempt_id),
     FOREIGN KEY (learner_id) REFERENCES learner(learner_id)
 );
 
@@ -146,3 +148,28 @@ CREATE TABLE uploaded_document (
     processing_status VARCHAR(30) DEFAULT 'uploaded',
     FOREIGN KEY (learner_id) REFERENCES learner(learner_id)
 );
+
+CREATE TABLE quiz_attempt (
+    quiz_id CHAR(36) NOT NULL,
+    learner_id INT NOT NULL,
+    document_id INT NOT NULL,
+    questions_json JSON NOT NULL,
+    status ENUM('open', 'submitted', 'expired') NOT NULL DEFAULT 'open',
+    expires_at DATETIME NOT NULL,
+    answers_hash CHAR(64) CHARACTER SET ascii NULL,
+    response_json JSON NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    submitted_at DATETIME NULL,
+    PRIMARY KEY (quiz_id),
+    KEY idx_quiz_attempt_learner_created (learner_id, created_at),
+    KEY idx_quiz_attempt_document (document_id),
+    KEY idx_quiz_attempt_expiry (status, expires_at),
+    CONSTRAINT fk_quiz_attempt_learner FOREIGN KEY (learner_id)
+        REFERENCES learner (learner_id),
+    CONSTRAINT fk_quiz_attempt_document FOREIGN KEY (document_id)
+        REFERENCES uploaded_document (document_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+ALTER TABLE assessment
+    ADD CONSTRAINT fk_assessment_quiz_attempt
+        FOREIGN KEY (quiz_attempt_id) REFERENCES quiz_attempt (quiz_id);

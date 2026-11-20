@@ -9,6 +9,7 @@ const { GoogleGenAI } = require('@google/genai');
 
 const mysql = require('../config/mysql');
 const authenticateToken = require('../middleware/authenticateToken');
+const quizAttemptService = require('../services/quizAttemptService');
 
 const router = express.Router();
 
@@ -25,8 +26,6 @@ if (!ai) {
     console.warn('Warning: GEMINI_API_KEY is not configured.');
 }
 
-// Store temporary quiz sessions.
-const quizSessions = new Map();
 const QUIZ_TTL_MS = 30 * 60 * 1000;
 
 // Project paths.
@@ -272,17 +271,6 @@ function handleAIError(res, error, action) {
     });
 }
 
-// Remove expired quiz sessions.
-function cleanExpiredQuizSessions() {
-    const now = Date.now();
-
-    for (const [id, session] of quizSessions) {
-        if (session.expiresAt <= now || session.submitted) {
-            quizSessions.delete(id);
-        }
-    }
-}
-
 // =====================================================
 // POST /api/ai/summarize
 // Generate a summary of an authenticated learner's document.
@@ -399,8 +387,6 @@ router.post('/chat', authenticateToken, async (req, res) => {
 router.post('/quiz', authenticateToken, async (req, res) => {
     try {
         requireAI();
-        cleanExpiredQuizSessions();
-
         const learnerId = req.user.learner_id;
         const documentId = Number(req.body.documentId);
         const questionCount = Number(req.body.questionCount ?? 5);
@@ -581,13 +567,13 @@ router.post('/quiz', authenticateToken, async (req, res) => {
 
         const quizId = crypto.randomUUID();
 
-        // Associate this quiz with the learner who generated it.
-        quizSessions.set(quizId, {
-            documentId,
+        const expiresAt = new Date(Date.now() + QUIZ_TTL_MS);
+        await quizAttemptService.createAttempt({
+            quizId,
             learnerId,
+            documentId,
             questions,
-            expiresAt: Date.now() + QUIZ_TTL_MS,
-            submitted: false
+            expiresAt
         });
 
         // Never expose correct answers before submission.
@@ -614,251 +600,25 @@ router.post(
     '/quiz/submit',
     authenticateToken,
     async (req, res) => {
-        const quizId = String(req.body.quizId || '');
-
-        // Never trust learnerId supplied by the browser.
-        const learnerId = req.user.learner_id;
-
-        const answers = req.body.answers;
-        const session = quizSessions.get(quizId);
-
-        if (!session || session.expiresAt <= Date.now()) {
-            quizSessions.delete(quizId);
-
-            return res.status(410).json({
-                error: 'This quiz has expired. Generate a new quiz and try again.'
-            });
-        }
-
-        if (session.submitted) {
-            return res.status(409).json({
-                error: 'This quiz has already been submitted.'
-            });
-        }
-
-        // Ensure the quiz belongs to the authenticated learner.
-        if (session.learnerId !== learnerId) {
-            return res.status(403).json({
-                error: 'You are not authorized to submit this quiz.'
-            });
-        }
-
-        if (
-            !Array.isArray(answers) ||
-            answers.length !== session.questions.length
-        ) {
-            return res.status(400).json({
-                error: 'Invalid quiz answers.'
-            });
-        }
-
-        if (
-            answers.some(answer =>
-                !Number.isInteger(Number(answer.questionIndex)) ||
-                Number(answer.questionIndex) < 0 ||
-                Number(answer.questionIndex) >= session.questions.length ||
-                typeof answer.selectedAnswer !== 'string'
-            )
-        ) {
-            return res.status(400).json({
-                error: 'One or more answers are invalid.'
-            });
-        }
-
-        const answerMap = new Map();
-
-        for (const answer of answers) {
-            const index = Number(answer.questionIndex);
-
-            if (answerMap.has(index)) {
-                return res.status(400).json({
-                    error: 'Duplicate answers were submitted.'
-                });
-            }
-
-            answerMap.set(index, answer.selectedAnswer);
-        }
-
-        if (answerMap.size !== session.questions.length) {
-            return res.status(400).json({
-                error: 'Please answer every question.'
-            });
-        }
-
-        const connection = await mysql.getConnection();
-        let transactionStarted = false;
-
         try {
-            const [learners] = await connection.execute(
-                'SELECT learner_id FROM learner WHERE learner_id = ?',
-                [learnerId]
-            );
-
-            if (!learners.length) {
-                return res.status(404).json({
-                    error: 'Learner not found.'
-                });
-            }
-
-            const conceptIds = [
-                ...new Set(session.questions.map(question => question.conceptId))
-            ];
-
-            const placeholders = conceptIds.map(() => '?').join(',');
-
-            const [validConcepts] = await connection.execute(
-                `SELECT concept_id
-                 FROM concept
-                 WHERE concept_id IN (${placeholders})`,
-                conceptIds
-            );
-
-            if (validConcepts.length !== conceptIds.length) {
-                return res.status(409).json({
-                    error: 'A concept in this quiz no longer exists.'
-                });
-            }
-
-            let correctCount = 0;
-            const grouped = new Map();
-
-            session.questions.forEach((question, index) => {
-                const selectedAnswer = answerMap.get(index);
-                const isCorrect = selectedAnswer === question.correctAnswer;
-
-                if (isCorrect) {
-                    correctCount++;
-                }
-
-                if (!grouped.has(question.conceptId)) {
-                    grouped.set(question.conceptId, {
-                        total: 0,
-                        correct: 0
-                    });
-                }
-
-                const group = grouped.get(question.conceptId);
-                group.total++;
-
-                if (isCorrect) {
-                    group.correct++;
-                }
+            const result = await quizAttemptService.submitAttempt({
+                quizId: req.body.quizId,
+                learnerId: req.user.learner_id,
+                answers: req.body.answers
             });
-
-            const overallScore = Number(
-                ((correctCount / session.questions.length) * 100).toFixed(2)
-            );
-
-            await connection.beginTransaction();
-            transactionStarted = true;
-
-            const [assessment] = await connection.execute(
-                `INSERT INTO assessment (learner_id, overall_score)
-                 VALUES (?, ?)`,
-                [learnerId, overallScore]
-            );
-
-            const conceptResults = [];
-
-            for (const [conceptId, group] of grouped) {
-                const score = Number(
-                    ((group.correct / group.total) * 100).toFixed(2)
-                );
-
-                await connection.execute(
-                    `INSERT INTO quiz_result
-                        (assessment_id, concept_id, score)
-                     VALUES (?, ?, ?)`,
-                    [assessment.insertId, conceptId, score]
-                );
-
-                await connection.execute(
-                    `INSERT INTO learning_path
-                        (learner_id, concept_id, mastery_level)
-                     VALUES (?, ?, ?)
-                     ON DUPLICATE KEY UPDATE
-                        mastery_level = VALUES(mastery_level)`,
-                    [learnerId, conceptId, score]
-                );
-
-                const conceptName =
-                    session.questions.find(
-                        question => question.conceptId === conceptId
-                    )?.conceptName || `Concept ${conceptId}`;
-
-                conceptResults.push({
-                    conceptId,
-                    conceptName,
-                    score,
-                    masteryLevel: score,
-                    needsRevision: score < 60
+            if (result.status === 'expired') {
+                return res.status(410).json({
+                    error: 'This quiz attempt has expired. Generate a new quiz.',
+                    code: 'QUIZ_ATTEMPT_EXPIRED'
                 });
             }
-
-            const assessedIds = [...grouped.keys()];
-            const assessedPlaceholders = assessedIds.map(() => '?').join(',');
-
-            await connection.execute(
-                `DELETE FROM recommendation
-                 WHERE learner_id = ?
-                 AND concept_id IN (${assessedPlaceholders})`,
-                [learnerId, ...assessedIds]
-            );
-
-            for (const result of conceptResults) {
-                if (result.needsRevision) {
-                    await connection.execute(
-                        `INSERT INTO recommendation (learner_id, concept_id)
-                         VALUES (?, ?)`,
-                        [learnerId, result.conceptId]
-                    );
-                }
-            }
-
-            await connection.commit();
-            transactionStarted = false;
-
-            session.submitted = true;
-            quizSessions.delete(quizId);
-
-            return res.status(201).json({
-                message: 'Quiz results saved successfully.',
-                assessmentId: assessment.insertId,
-                overallScore,
-                correctCount,
-                totalQuestions: session.questions.length,
-                conceptResults,
-                review: session.questions.map((question, index) => ({
-                    question: question.question,
-                    options: question.options,
-                    selectedAnswer: answerMap.get(index),
-                    correctAnswer: question.correctAnswer,
-                    explanation: question.explanation,
-                    isCorrect:
-                        answerMap.get(index) === question.correctAnswer,
-                    conceptId: question.conceptId,
-                    conceptName: question.conceptName
-                }))
-            });
-
+            return res.status(result.status === 'created' ? 201 : 200).json(result.response);
         } catch (error) {
-            if (transactionStarted) {
-                await connection.rollback();
+            if (error.status) {
+                return res.status(error.status).json({ error: error.message, code: error.code });
             }
-
-            console.error(
-                '[NeuroLearn] Quiz submission failed:',
-                error
-            );
-
-            return res.status(error.status || 500).json({
-                error: error.status
-                    ? error.message
-                    : 'Could not save quiz results.'
-            });
-
-        } finally {
-            connection.release();
+            console.error('[NeuroLearn] Quiz submission failed:', error);
+            return res.status(500).json({ error: 'Could not save quiz results.' });
         }
     }
 );
