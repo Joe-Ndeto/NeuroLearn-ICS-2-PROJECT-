@@ -13,6 +13,14 @@ class CourseValidationError extends Error {
     }
 }
 
+class PrerequisiteGraphError extends Error {
+    constructor(code, message) {
+        super(message);
+        this.name = 'PrerequisiteGraphError';
+        this.code = code;
+    }
+}
+
 async function initializeKnowledgeGraph() {
     const session = getSession();
 
@@ -207,6 +215,136 @@ async function getAllConcepts() {
     }
 }
 
+/**
+ * Reads the selected course's concept associations and the complete prerequisite
+ * closure for each candidate. Edge direction is prerequisite -> dependent, so
+ * prerequisite traversal follows incoming PREREQUISITE_OF paths.
+ */
+async function getPrerequisiteClosure(candidateGraphIds, {
+    courseId,
+    getSessionFactory = getSession
+} = {}) {
+    if (typeof courseId !== 'string' || !courseId.trim()) {
+        throw new PrerequisiteGraphError('INVALID_COURSE_ID', 'A course ID is required.');
+    }
+    if (!Array.isArray(candidateGraphIds)) {
+        throw new PrerequisiteGraphError('INVALID_CANDIDATE_IDS', 'Candidate graph IDs must be an array.');
+    }
+    const candidateIds = candidateGraphIds.map(id => {
+        if (typeof id !== 'string' || !id.trim()) {
+            throw new PrerequisiteGraphError('INVALID_CANDIDATE_IDS', 'Candidate graph IDs must be non-empty strings.');
+        }
+        return id;
+    });
+    if (new Set(candidateIds).size !== candidateIds.length) {
+        throw new PrerequisiteGraphError('INVALID_CANDIDATE_IDS', 'Candidate graph IDs must be unique.');
+    }
+
+    let session;
+    let operationError = null;
+    try {
+        session = getSessionFactory();
+        return await session.executeRead(async tx => {
+            const courseResult = await tx.run(`
+                MATCH (course:Course {course_id: $courseId})
+                RETURN course.name AS courseName
+            `, { courseId });
+            if (courseResult.records.length !== 1) {
+                throw new PrerequisiteGraphError('COURSE_NOT_FOUND', 'The requested course was not found in the knowledge graph.');
+            }
+            const courseName = courseResult.records[0].get('courseName');
+            if (typeof courseName !== 'string' || !courseName.trim()) {
+                throw new PrerequisiteGraphError('INVALID_COURSE', 'The requested graph course has no valid name.');
+            }
+            const membersResult = await tx.run(`
+                MATCH (course:Course {course_id: $courseId})-[:CONTAINS]->(concept:Concept)
+                RETURN DISTINCT concept.concept_id AS conceptId
+                ORDER BY conceptId
+            `, { courseId });
+            const courseConceptIds = membersResult.records.map(record => record.get('conceptId'));
+            if (courseConceptIds.some(id => typeof id !== 'string' || !id.trim()) ||
+                new Set(courseConceptIds).size !== courseConceptIds.length) {
+                throw new PrerequisiteGraphError('INVALID_COURSE_ASSOCIATION', 'The graph course has invalid concept associations.');
+            }
+
+            if (candidateIds.length === 0) {
+                return { courseId, courseName, courseConceptIds, closures: [], edges: [] };
+            }
+
+            const closureResult = await tx.run(`
+                UNWIND $candidateGraphIds AS candidateGraphId
+                MATCH (candidate:Concept {concept_id: candidateGraphId})
+                OPTIONAL MATCH (prerequisite:Concept)-[:PREREQUISITE_OF*1..]->(candidate)
+                RETURN candidateGraphId AS candidateGraphId,
+                       collect(DISTINCT CASE WHEN prerequisite IS NULL THEN null
+                           ELSE { conceptId: prerequisite.concept_id }
+                       END) AS prerequisiteNodes
+                ORDER BY candidateGraphId
+            `, { candidateGraphIds: candidateIds });
+            if (closureResult.records.length !== candidateIds.length) {
+                throw new PrerequisiteGraphError('MISSING_CANDIDATE_NODE', 'A candidate concept is missing from the knowledge graph.');
+            }
+            const closures = closureResult.records.map(record => {
+                const prerequisiteNodes = record.get('prerequisiteNodes');
+                if (!Array.isArray(prerequisiteNodes)) {
+                    throw new PrerequisiteGraphError('INVALID_PREREQUISITE_CLOSURE', 'The graph returned an invalid prerequisite closure.');
+                }
+                const prerequisiteGraphIds = prerequisiteNodes.map(node => {
+                    const conceptId = node && node.conceptId;
+                    if (typeof conceptId !== 'string' || !conceptId.trim()) {
+                        throw new PrerequisiteGraphError('INVALID_PREREQUISITE_NODE', 'A prerequisite graph node has no valid concept ID.');
+                    }
+                    return conceptId;
+                });
+                return { candidateGraphId: record.get('candidateGraphId'), prerequisiteGraphIds };
+            });
+            const closureCandidateIds = closures.map(item => item.candidateGraphId);
+            if (new Set(closureCandidateIds).size !== candidateIds.length ||
+                candidateIds.some(id => !closureCandidateIds.includes(id)) ||
+                closures.some(item => !Array.isArray(item.prerequisiteGraphIds) ||
+                    item.prerequisiteGraphIds.some(id => typeof id !== 'string' || !id.trim()) ||
+                    new Set(item.prerequisiteGraphIds).size !== item.prerequisiteGraphIds.length)) {
+                throw new PrerequisiteGraphError('INVALID_PREREQUISITE_CLOSURE', 'The graph returned an invalid prerequisite closure.');
+            }
+
+            const relevantNodeIds = [...new Set([
+                ...candidateIds,
+                ...closures.flatMap(item => item.prerequisiteGraphIds)
+            ])];
+            const edgeResult = await tx.run(`
+                MATCH (prerequisite:Concept)-[:PREREQUISITE_OF]->(target:Concept)
+                WHERE prerequisite.concept_id IN $conceptIds
+                  AND target.concept_id IN $conceptIds
+                RETURN prerequisite.concept_id AS prerequisiteGraphId,
+                       target.concept_id AS targetGraphId
+            `, { conceptIds: relevantNodeIds });
+            const edges = edgeResult.records.map(record => ({
+                prerequisiteGraphId: record.get('prerequisiteGraphId'),
+                targetGraphId: record.get('targetGraphId')
+            }));
+            if (edges.some(edge => typeof edge.prerequisiteGraphId !== 'string' || !edge.prerequisiteGraphId.trim() ||
+                typeof edge.targetGraphId !== 'string' || !edge.targetGraphId.trim())) {
+                throw new PrerequisiteGraphError('INVALID_PREREQUISITE_EDGE', 'The graph returned an invalid prerequisite edge.');
+            }
+            return { courseId, courseName, courseConceptIds, closures, edges };
+        });
+    } catch (error) {
+        operationError = error;
+        if (error instanceof PrerequisiteGraphError) throw error;
+        throw new PrerequisiteGraphError('GRAPH_UNAVAILABLE', 'Prerequisite graph data is unavailable.');
+    } finally {
+        if (session) {
+            try {
+                await session.close();
+            } catch {
+                if (!operationError) {
+                    throw new PrerequisiteGraphError('GRAPH_UNAVAILABLE', 'Prerequisite graph data is unavailable.');
+                }
+            }
+        }
+    }
+}
+
 async function createCourse(data) {
     return (await provisionCourse(data)).course;
 }
@@ -317,11 +455,13 @@ async function addLearningResource(data) {
 
 module.exports = {
     CourseValidationError,
+    PrerequisiteGraphError,
     initializeKnowledgeGraph,
     getAllCourses,
     provisionCourse,
     validateCourseIds,
     getAllConcepts,
+    getPrerequisiteClosure,
     createCourse,
     createConcept,
     addPrerequisite,

@@ -16,7 +16,7 @@ Module._load = function (request, parent, isMain) {
     return originalLoad.call(this, request, parent, isMain);
 };
 
-const { validateCourseIds, provisionCourse } = require('../src/services/knowledgeGraphService');
+const { validateCourseIds, provisionCourse, getPrerequisiteClosure } = require('../src/services/knowledgeGraphService');
 Module._load = originalLoad;
 
 const COURSE_A = 'COURSE-11111111-1111-4111-8111-111111111111';
@@ -32,6 +32,9 @@ function createSession(records, runError) {
                 calls.run.push({ query, parameters });
                 if (runError) throw runError;
                 return { records };
+            },
+            async executeRead(work) {
+                return work({ run: this.run.bind(this) });
             },
             async close() {
                 calls.close += 1;
@@ -218,4 +221,151 @@ test('concurrent provisioning requests converge on one course using the unique c
     assert.equal(mock.courses.length, 1);
     assert.equal(new Set(results.map(result => result.course.course_id)).size, 1);
     assert.equal(results.filter(result => result.created).length, 1);
+});
+
+const graphValueRecord = values => ({ get: key => values[key] });
+
+function prerequisiteReadSession({ missingCandidate = false, failQuery = null, courseIds = ['CONCEPT-1'],
+    closures = [{ candidateGraphId: 'CONCEPT-1', prerequisiteGraphIds: ['CONCEPT-0'] }],
+    prerequisiteNodes = null,
+    edges = [{ prerequisiteGraphId: 'CONCEPT-0', targetGraphId: 'CONCEPT-1' }], failClose = false } = {}) {
+    const calls = { run: [], close: 0, executeRead: 0 };
+    const session = {
+        async executeRead(work) {
+            calls.executeRead++;
+            return work({
+                async run(query, parameters) {
+                    calls.run.push({ query, parameters });
+                    if (failQuery && query.includes(failQuery)) throw new Error('graph read failed');
+                    if (/RETURN course\.name AS courseName/.test(query)) {
+                        return { records: [graphValueRecord({ courseName: 'Database Concepts' })] };
+                    }
+                    if (/RETURN DISTINCT concept\.concept_id AS conceptId/.test(query)) {
+                        return { records: courseIds.map(conceptId => graphValueRecord({ conceptId })) };
+                    }
+                    if (/AS prerequisiteNodes/.test(query)) {
+                        const records = missingCandidate ? [] : closures.map((row, index) => graphValueRecord({
+                            candidateGraphId: row.candidateGraphId,
+                            prerequisiteNodes: prerequisiteNodes
+                                ? prerequisiteNodes[index]
+                                : row.prerequisiteGraphIds.map(conceptId => ({ conceptId }))
+                        }));
+                        return { records };
+                    }
+                    if (/RETURN prerequisite\.concept_id AS prerequisiteGraphId/.test(query)) {
+                        return { records: edges.map(row => graphValueRecord(row)) };
+                    }
+                    throw new Error(`Unexpected graph query: ${query}`);
+                }
+            });
+        },
+        async close() {
+            calls.close++;
+            if (failClose) throw new Error('session close failed');
+        }
+    };
+    return { session, calls };
+}
+
+test('reads the complete prerequisite closure with the established edge direction and course associations', async () => {
+    const mock = prerequisiteReadSession({
+        courseIds: ['CONCEPT-1'],
+        closures: [{ candidateGraphId: 'CONCEPT-1', prerequisiteGraphIds: ['CONCEPT-0', 'CONCEPT-ROOT'] }],
+        edges: [
+            { prerequisiteGraphId: 'CONCEPT-ROOT', targetGraphId: 'CONCEPT-0' },
+            { prerequisiteGraphId: 'CONCEPT-0', targetGraphId: 'CONCEPT-1' }
+        ]
+    });
+    mockGetSession = () => mock.session;
+
+    const result = await getPrerequisiteClosure(['CONCEPT-1'], { courseId: COURSE_A });
+
+    assert.deepEqual(result, {
+        courseId: COURSE_A,
+        courseName: 'Database Concepts',
+        courseConceptIds: ['CONCEPT-1'],
+        closures: [{ candidateGraphId: 'CONCEPT-1', prerequisiteGraphIds: ['CONCEPT-0', 'CONCEPT-ROOT'] }],
+        edges: [
+            { prerequisiteGraphId: 'CONCEPT-ROOT', targetGraphId: 'CONCEPT-0' },
+            { prerequisiteGraphId: 'CONCEPT-0', targetGraphId: 'CONCEPT-1' }
+        ]
+    });
+    const closureQuery = mock.calls.run.find(call => /AS prerequisiteNodes/.test(call.query));
+    assert.match(closureQuery.query, /\(prerequisite:Concept\)-\[:PREREQUISITE_OF\*1\.\.\]->\(candidate\)/);
+    assert.match(closureQuery.query, /CASE WHEN prerequisite IS NULL THEN null[\s\S]*prerequisite\.concept_id/);
+    assert.deepEqual(closureQuery.parameters, { candidateGraphIds: ['CONCEPT-1'] });
+    assert.equal(mock.calls.executeRead, 1);
+    assert.equal(mock.calls.close, 1);
+});
+
+test('confirmed graph candidate with no edges returns an explicit empty prerequisite closure', async () => {
+    const mock = prerequisiteReadSession({
+        closures: [{ candidateGraphId: 'CONCEPT-1', prerequisiteGraphIds: [] }],
+        edges: []
+    });
+    mockGetSession = () => mock.session;
+
+    const result = await getPrerequisiteClosure(['CONCEPT-1'], { courseId: COURSE_A });
+    assert.deepEqual(result.closures, [{ candidateGraphId: 'CONCEPT-1', prerequisiteGraphIds: [] }]);
+    assert.equal(mock.calls.close, 1);
+});
+
+test('rejects prerequisite nodes whose concept ID is null or missing', async t => {
+    for (const [label, node] of [['null concept ID', { conceptId: null }], ['missing concept ID', {}]]) {
+        await t.test(label, async () => {
+            const mock = prerequisiteReadSession({
+                closures: [{ candidateGraphId: 'CONCEPT-1', prerequisiteGraphIds: [] }],
+                prerequisiteNodes: [[node]],
+                edges: []
+            });
+            mockGetSession = () => mock.session;
+
+            await assert.rejects(
+                getPrerequisiteClosure(['CONCEPT-1'], { courseId: COURSE_A }),
+                error => error.code === 'INVALID_PREREQUISITE_NODE'
+            );
+            assert.equal(mock.calls.close, 1);
+        });
+    }
+});
+
+test('fails closed when a requested candidate node is missing and closes the session', async () => {
+    const mock = prerequisiteReadSession({ missingCandidate: true });
+    mockGetSession = () => mock.session;
+
+    await assert.rejects(
+        getPrerequisiteClosure(['CONCEPT-1'], { courseId: COURSE_A }),
+        error => error.code === 'MISSING_CANDIDATE_NODE'
+    );
+    assert.equal(mock.calls.close, 1);
+});
+
+test('fails closed on graph query errors and closes the session', async () => {
+    const mock = prerequisiteReadSession({ failQuery: 'PREREQUISITE_OF' });
+    mockGetSession = () => mock.session;
+
+    await assert.rejects(
+        getPrerequisiteClosure(['CONCEPT-1'], { courseId: COURSE_A }),
+        error => error.code === 'GRAPH_UNAVAILABLE'
+    );
+    assert.equal(mock.calls.close, 1);
+});
+
+test('fails closed when closing a successful graph read fails', async () => {
+    const mock = prerequisiteReadSession({ failClose: true });
+    mockGetSession = () => mock.session;
+
+    await assert.rejects(
+        getPrerequisiteClosure(['CONCEPT-1'], { courseId: COURSE_A }),
+        error => error.code === 'GRAPH_UNAVAILABLE'
+    );
+    assert.equal(mock.calls.close, 1);
+});
+
+test('rejects malformed candidate IDs before opening a graph session', async () => {
+    mockGetSession = () => assert.fail('session should not be opened');
+    await assert.rejects(
+        getPrerequisiteClosure(['CONCEPT-1', '  '], { courseId: COURSE_A }),
+        error => error.code === 'INVALID_CANDIDATE_IDS'
+    );
 });
