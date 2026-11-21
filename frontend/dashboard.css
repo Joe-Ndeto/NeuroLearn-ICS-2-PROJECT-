@@ -293,6 +293,106 @@ header {
     margin-bottom: 20px;
 }
 
+.student-recommendations {
+    margin: 0 0 40px;
+    padding: 24px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+.recommendations-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+}
+
+.recommendations-heading .section-subtitle {
+    margin-bottom: 14px;
+}
+
+.recommendations-retry {
+    width: auto;
+    min-width: 105px;
+}
+
+.recommendations-state {
+    margin: 12px 0;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.recommendations-error {
+    color: #b91c1c;
+}
+
+.recommendations-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.recommendation-card {
+    min-width: 0;
+    padding: 20px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+}
+
+.recommendation-title {
+    margin: 0 0 12px;
+    font-size: 1.08rem;
+    overflow-wrap: anywhere;
+}
+
+.recommendation-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.recommendation-metrics span {
+    padding: 4px 8px;
+    border-radius: 7px;
+    background: #f1f5f9;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.recommendation-metrics .recommendation-priority {
+    background: var(--primary-light);
+    color: var(--primary);
+}
+
+.recommendation-explanation,
+.recommendation-readiness-summary {
+    margin: 10px 0 0;
+    color: var(--text-muted);
+    font-size: 0.87rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.recommendation-prerequisites-title {
+    margin: 16px 0 0;
+    font-size: 0.9rem;
+}
+
+.recommendation-prerequisite-list {
+    margin: 8px 0 0;
+    padding-left: 20px;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
 .courses-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -1287,6 +1387,22 @@ header {
 }
 
 @media (max-width: 650px) {
+    .student-recommendations {
+        padding: 18px;
+    }
+
+    .recommendations-heading {
+        flex-direction: column;
+    }
+
+    .recommendations-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .recommendations-retry {
+        align-self: flex-start;
+    }
+
     .admin-sync-operations {
         padding: 18px;
     }

@@ -145,6 +145,31 @@
 
         </div>
 
+        <section class="student-recommendations" id="student-recommendations"
+            aria-labelledby="student-recommendations-title" aria-busy="true">
+            <div class="recommendations-heading">
+                <div>
+                    <div class="section-title" id="student-recommendations-title">Recommended next concepts</div>
+                    <p class="section-subtitle">Suggestions based on your quiz evidence and Database Concepts prerequisites.</p>
+                </div>
+                <button class="btn-outline recommendations-retry" id="recommendations-retry" type="button" hidden>
+                    Try again
+                </button>
+            </div>
+
+            <p class="recommendations-state nl-loading-indicator" id="recommendations-loading"
+                role="status" aria-label="Loading recommendations" aria-busy="true">
+                <span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading recommendations</span>
+            </p>
+            <p class="recommendations-state" id="recommendations-empty" role="status" hidden>
+                No recommendations are available yet. Complete learning activities and quizzes to build your learning history.
+            </p>
+            <p class="recommendations-state recommendations-error" id="recommendations-error" role="alert" hidden>
+                Recommendations could not be loaded. Please try again.
+            </p>
+            <div class="recommendations-grid" id="recommendations-list" aria-live="polite"></div>
+        </section>
+
         <section class="knowledge-contributions" id="knowledge-contributions" hidden
             aria-labelledby="knowledge-contributions-title">
             <div class="section-title" id="knowledge-contributions-title">Database Concepts</div>

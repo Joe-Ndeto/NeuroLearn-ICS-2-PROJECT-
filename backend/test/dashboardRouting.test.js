@@ -123,6 +123,11 @@ test('student and admin pages load only their own feature modules and markup', (
     const adminSyncModule = readFrontend('admin-sync-operations.js');
 
     assert.match(studentHtml, /id="overall-progress"/);
+    assert.match(studentHtml, /id="student-recommendations"/);
+    assert.match(studentHtml, /id="recommendations-loading"/);
+    assert.match(studentHtml, /id="recommendations-empty"/);
+    assert.match(studentHtml, /id="recommendations-error"/);
+    assert.match(studentHtml, /id="recommendations-list"/);
     assert.match(studentHtml, /id="concept-submission-form"/);
     assert.match(studentHtml, /id="submission-history"/);
     assert.doesNotMatch(studentHtml, /id="admin-submission-review"|id="admin-sync-operations"/);
@@ -159,6 +164,20 @@ test('student and admin pages load only their own feature modules and markup', (
         }
     }
     assert.match(studentJs, /async function initializeDashboard\(\)[\s\S]*?roleRouting\.validateAndRoute[\s\S]*?loadStudentContributionModule\(\)/);
+    assert.match(studentJs, /api\.get\('\/recommendations\/me'\)/);
+    assert.match(studentJs, /response\.recommendations\.map\(recommendation =>[\s\S]*?renderRecommendation/);
+    assert.match(studentJs, /elements\.empty\.hidden = false/);
+    assert.match(studentJs, /elements\.error\.hidden = false/);
+    assert.match(studentJs, /recommendation\.explanation/);
+    assert.match(studentJs, /recommendation\.evidenceStatus/);
+    assert.match(studentJs, /recommendation\.priorityScore/);
+    assert.match(studentJs, /readiness\.prerequisites/);
+    assert.match(studentJs, /element\.textContent = value/);
+    assert.doesNotMatch(studentJs, /innerHTML\s*=/);
+    const studentInitialization = studentJs.slice(studentJs.indexOf('async function initializeDashboard'));
+    assert.ok(studentInitialization.indexOf('void loadStudentRecommendations()') <
+        studentInitialization.indexOf('await loadStudentContributionModule()'),
+    'recommendations should load even if the separate contribution module fails');
     assert.match(adminJs, /async function initializeAdminDashboard\(\)[\s\S]*?roleRouting\.validateAndRoute[\s\S]*?loadAdminModules\(\)/);
 });
 
