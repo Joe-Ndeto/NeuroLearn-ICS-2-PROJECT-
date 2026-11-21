@@ -12,6 +12,12 @@ docker compose up -d mysql
 
 The scripts are not reapplied when the existing `mysql_data` volume is reused. For a non-Docker installation, select a newly created empty NeuroLearn database and import `schema.sql` with a MySQL client. Provide credentials through local configuration; do not commit credentials.
 
+## UTC session and date handling
+
+UTC is the required convention for future database timestamps. The backend configures mysql2 `timezone: 'Z'` so JavaScript `Date` values are converted using UTC, and separately initializes every new pooled MySQL connection with `SET time_zone = '+00:00'` so MySQL session timestamp functions such as `CURRENT_TIMESTAMP` use UTC. The mysql2 option does not set the MySQL session timezone. The pool queues the session initialization before a new connection is handed to application code; if initialization fails, that connection is destroyed and a generic error is logged.
+
+MySQL `DATETIME` values do not carry a timezone. Existing historical `assessment.assessment_date` values have not been verified and must not automatically be assumed to represent UTC. Historical normalization or reinterpretation is outside this configuration change and requires a separate data and deployment-history review.
+
 ## Synchronization schema
 
 The schema keeps MySQL as the source of truth for canonical concepts, resources, and approval decisions while storing stable identifiers that can map those records to Neo4j.
