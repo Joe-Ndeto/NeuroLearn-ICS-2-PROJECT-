@@ -39,7 +39,21 @@ function validateObservation(observation, index) {
         throw new TypeError(`Observation at index ${index} has an invalid score.`);
     }
 
-    const assessmentDate = parseDate(observation.assessmentDate, `assessmentDate at index ${index}`);
+    const provenance = observation.timestampProvenance;
+    if (provenance !== undefined && provenance !== 'utc' && provenance !== 'unknown') {
+        throw new TypeError(`Observation at index ${index} has invalid timestamp provenance.`);
+    }
+    const legacyProvenance = provenance === undefined;
+    const unknownTime = provenance === 'unknown';
+    const verifiedUtc = provenance === 'utc';
+    let assessmentDate = null;
+    if (observation.assessmentDate === null) {
+        if (!unknownTime) {
+            throw new TypeError(`assessmentDate at index ${index} must be a valid date unless timestamp provenance is unknown.`);
+        }
+    } else {
+        assessmentDate = parseDate(observation.assessmentDate, `assessmentDate at index ${index}`);
+    }
     const questionIsNull = observation.questionCount === null;
     const correctIsNull = observation.correctCount === null;
     if (questionIsNull !== correctIsNull) {
@@ -56,11 +70,24 @@ function validateObservation(observation, index) {
         baseWeight = Math.min(observation.questionCount, MAX_QUESTION_WEIGHT);
     }
 
-    return { key, score: observation.score, assessmentDate, baseWeight };
+    return {
+        key,
+        score: observation.score,
+        assessmentDate,
+        baseWeight,
+        legacyProvenance,
+        unknownTime,
+        verifiedUtc,
+        applyRecency: !unknownTime
+    };
 }
 
 /**
  * Calculates recency-weighted mastery for one concept.
+ * Explicit UTC observations count as verified; explicit unknown observations count as unknown-time
+ * and skip recency decay. Legacy observations without provenance retain recency decay but are
+ * reported separately because their timestamps are not verified as UTC.
+ * Coverage is complete only for a non-empty set where every observation has UTC provenance.
  * Future assessment timestamps are treated as occurring at `asOf` (zero elapsed days)
  * to avoid giving clock-skewed observations more than their base question weight.
  */
@@ -81,14 +108,29 @@ function calculateMastery(observations, { asOf } = {}) {
             distinctAssessmentCount: 0,
             isMastered: false,
             prerequisiteSatisfied: false,
-            totalWeight: 0
+            totalWeight: 0,
+            temporalCoverage: {
+                totalObservations: 0,
+                verifiedUtcObservations: 0,
+                unknownTimeObservations: 0,
+                legacyObservations: 0,
+                complete: false
+            }
         };
     }
 
     let weightedScore = 0;
     let totalWeight = 0;
+    let verifiedUtcObservations = 0;
+    let unknownTimeObservations = 0;
+    let legacyObservations = 0;
     for (const observation of validated) {
-        const elapsedDays = Math.max(0, (asOfDate.getTime() - observation.assessmentDate.getTime()) / MILLISECONDS_PER_DAY);
+        if (observation.verifiedUtc) verifiedUtcObservations++;
+        else if (observation.unknownTime) unknownTimeObservations++;
+        else if (observation.legacyProvenance) legacyObservations++;
+        const elapsedDays = observation.applyRecency
+            ? Math.max(0, (asOfDate.getTime() - observation.assessmentDate.getTime()) / MILLISECONDS_PER_DAY)
+            : 0;
         const weight = observation.baseWeight * (2 ** (-elapsedDays / HALF_LIFE_DAYS));
         weightedScore += weight * observation.score;
         totalWeight += weight;
@@ -105,7 +147,14 @@ function calculateMastery(observations, { asOf } = {}) {
         distinctAssessmentCount,
         isMastered: mastery >= MASTERED_THRESHOLD,
         prerequisiteSatisfied: evidenceQualified && mastery >= PREREQUISITE_THRESHOLD,
-        totalWeight
+        totalWeight,
+        temporalCoverage: {
+            totalObservations: validated.length,
+            verifiedUtcObservations,
+            unknownTimeObservations,
+            legacyObservations,
+            complete: validated.length > 0 && verifiedUtcObservations === validated.length
+        }
     };
 }
 

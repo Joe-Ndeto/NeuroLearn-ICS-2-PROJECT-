@@ -92,7 +92,7 @@ CREATE TABLE learning_path (
     path_id INT AUTO_INCREMENT PRIMARY KEY,
     learner_id INT NOT NULL,
     concept_id INT NOT NULL,
-    mastery_level DECIMAL(5,2) DEFAULT 0,
+    mastery_level DECIMAL(7,4) DEFAULT 0,
     UNIQUE (learner_id, concept_id),
     FOREIGN KEY (learner_id) REFERENCES learner(learner_id),
     FOREIGN KEY (concept_id) REFERENCES concept(concept_id)
@@ -103,6 +103,7 @@ CREATE TABLE assessment (
     learner_id INT NOT NULL,
     quiz_attempt_id CHAR(36) NULL,
     assessment_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    timestamp_provenance ENUM('unknown', 'utc') NOT NULL DEFAULT 'unknown',
     overall_score DECIMAL(5,2) NOT NULL,
     UNIQUE KEY uq_assessment_quiz_attempt (quiz_attempt_id),
     FOREIGN KEY (learner_id) REFERENCES learner(learner_id)

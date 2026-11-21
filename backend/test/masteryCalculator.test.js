@@ -20,6 +20,7 @@ const observation = (assessmentId, score, overrides = {}) => ({
     assessmentDate: AS_OF,
     questionCount: 1,
     correctCount: score === 100 ? 1 : 0,
+    timestampProvenance: 'utc',
     ...overrides
 });
 const closeTo = (actual, expected, tolerance = 1e-10) => assert.ok(Math.abs(actual - expected) <= tolerance, `${actual} was not within ${tolerance} of ${expected}`);
@@ -40,7 +41,14 @@ test('no observations produce unknown mastery without satisfying either threshol
         distinctAssessmentCount: 0,
         isMastered: false,
         prerequisiteSatisfied: false,
-        totalWeight: 0
+        totalWeight: 0,
+        temporalCoverage: {
+            totalObservations: 0,
+            verifiedUtcObservations: 0,
+            unknownTimeObservations: 0,
+            legacyObservations: 0,
+            complete: false
+        }
     });
 });
 
@@ -78,6 +86,30 @@ test('mastery exactly 85 is mastered while prerequisite status remains independe
     assert.equal(qualified.prerequisiteSatisfied, true);
 });
 
+test('four-decimal mastery precision preserves decisions immediately around 80 and 85', () => {
+    const belowPrerequisite = calculateMastery([
+        observation('prereq-below-a', 79.9999), observation('prereq-below-b', 79.9999)
+    ], { asOf: AS_OF });
+    const abovePrerequisite = calculateMastery([
+        observation('prereq-above-a', 80.0001), observation('prereq-above-b', 80.0001)
+    ], { asOf: AS_OF });
+    const belowMastered = calculateMastery([
+        observation('mastery-below-a', 84.9999), observation('mastery-below-b', 84.9999)
+    ], { asOf: AS_OF });
+    const aboveMastered = calculateMastery([
+        observation('mastery-above-a', 85.0001), observation('mastery-above-b', 85.0001)
+    ], { asOf: AS_OF });
+
+    assert.equal(belowPrerequisite.mastery, 79.9999);
+    assert.equal(belowPrerequisite.prerequisiteSatisfied, false);
+    assert.equal(abovePrerequisite.mastery, 80.0001);
+    assert.equal(abovePrerequisite.prerequisiteSatisfied, true);
+    assert.equal(belowMastered.mastery, 84.9999);
+    assert.equal(belowMastered.isMastered, false);
+    assert.equal(aboveMastered.mastery, 85.0001);
+    assert.equal(aboveMastered.isMastered, true);
+});
+
 test('known question counts weight an assessment by its question count', () => {
     const result = calculateMastery([
         observation(1, 100, { questionCount: 4, correctCount: 4 }),
@@ -103,6 +135,111 @@ test('weight halves after 45 days of recency decay', () => {
     ], { asOf: AS_OF });
     closeTo(result.totalWeight, 1.5);
     assert.equal(result.mastery, 33.3333);
+});
+
+test('unknown provenance uses base weights without recency decay', () => {
+    const result = calculateMastery([
+        observation('unknown-recent', 100, { questionCount: 1, correctCount: 1, timestampProvenance: 'unknown', assessmentDate: AS_OF }),
+        observation('unknown-old', 0, { questionCount: 5, correctCount: 0, timestampProvenance: 'unknown', assessmentDate: dateDaysAgo(450) })
+    ], { asOf: AS_OF });
+    assert.equal(result.totalWeight, 6);
+    assert.equal(result.mastery, 16.6667);
+    assert.deepEqual(result.temporalCoverage, {
+        totalObservations: 2,
+        verifiedUtcObservations: 0,
+        unknownTimeObservations: 2,
+        legacyObservations: 0,
+        complete: false
+    });
+});
+
+test('NULL historical dates require unknown provenance and use base evidence weight', () => {
+    const result = calculateMastery([
+        observation('undated', 75, {
+            assessmentDate: null,
+            questionCount: 3,
+            correctCount: 2,
+            timestampProvenance: 'unknown'
+        })
+    ], { asOf: AS_OF });
+    assert.equal(result.mastery, 75);
+    assert.equal(result.totalWeight, 3);
+    assert.equal(result.temporalCoverage.unknownTimeObservations, 1);
+
+    assert.throws(() => calculateMastery([
+        observation('undated-without-provenance', 75, { assessmentDate: null })
+    ], { asOf: AS_OF }));
+    assert.throws(() => calculateMastery([
+        observation('utc-undated', 75, { assessmentDate: null, timestampProvenance: 'utc' })
+    ], { asOf: AS_OF }));
+});
+
+test('malformed non-NULL dates remain errors for unknown provenance', () => {
+    assert.throws(() => calculateMastery([
+        observation('malformed-unknown', 75, {
+            assessmentDate: 'not-a-date',
+            timestampProvenance: 'unknown'
+        })
+    ], { asOf: AS_OF }));
+});
+
+test('invalid timestamp provenance is rejected', () => {
+    assert.throws(() => calculateMastery([
+        observation('invalid-provenance', 75, { timestampProvenance: 'local' })
+    ], { asOf: AS_OF }), /timestamp provenance/);
+});
+
+test('legacy valid-date calls retain recency behavior and are not classified as UTC or explicitly unknown', () => {
+    const legacyRecent = { ...observation('legacy-recent', 0) };
+    const legacyOld = { ...observation('legacy-old', 100, { assessmentDate: dateDaysAgo(HALF_LIFE_DAYS) }) };
+    delete legacyRecent.timestampProvenance;
+    delete legacyOld.timestampProvenance;
+    const result = calculateMastery([legacyRecent, legacyOld], { asOf: AS_OF });
+    closeTo(result.totalWeight, 1.5);
+    assert.equal(result.mastery, 33.3333);
+    assert.deepEqual(result.temporalCoverage, {
+        totalObservations: 2,
+        verifiedUtcObservations: 0,
+        unknownTimeObservations: 0,
+        legacyObservations: 2,
+        complete: false
+    });
+});
+
+test('temporal coverage distinguishes legacy, explicit unknown, and verified UTC observations', () => {
+    const complete = calculateMastery([
+        observation('utc-a', 80), observation('utc-b', 80)
+    ], { asOf: AS_OF });
+    assert.deepEqual(complete.temporalCoverage, {
+        totalObservations: 2,
+        verifiedUtcObservations: 2,
+        unknownTimeObservations: 0,
+        legacyObservations: 0,
+        complete: true
+    });
+
+    const mixed = calculateMastery([
+        observation('utc', 80),
+        observation('unknown', 80, { timestampProvenance: 'unknown', assessmentDate: null }),
+        (() => {
+            const legacy = observation('legacy', 80);
+            delete legacy.timestampProvenance;
+            return legacy;
+        })()
+    ], { asOf: AS_OF });
+    assert.deepEqual(mixed.temporalCoverage, {
+        totalObservations: 3,
+        verifiedUtcObservations: 1,
+        unknownTimeObservations: 1,
+        legacyObservations: 1,
+        complete: false
+    });
+});
+
+test('zero observations have incomplete temporal coverage because no timestamps were verified', () => {
+    const result = calculateMastery([], { asOf: AS_OF });
+    assert.equal(result.temporalCoverage.totalObservations, 0);
+    assert.equal(result.temporalCoverage.complete, false);
 });
 
 test('historical rows with both counts null use fallback weight one', () => {

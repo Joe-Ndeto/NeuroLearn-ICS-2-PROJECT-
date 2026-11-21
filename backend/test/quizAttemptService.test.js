@@ -23,7 +23,8 @@ function makeDb() {
         failSql: null, failRollback: false, commitFailure: null, sqlSeen: [],
         executedByConnection: new Map(), connectionCount: 0, getConnectionCalls: 0,
         failConnectionCall: null, failReconcileQuery: false, destroyedConnections: 0,
-        releasedConnections: 0, forcedAttemptUpdateRows: null
+        releasedConnections: 0, forcedAttemptUpdateRows: null,
+        assessmentDateForInsert: new Date(), omitEvidence: false, executions: []
     };
     let tail = Promise.resolve();
     const clone = value => structuredClone(value);
@@ -49,6 +50,7 @@ function makeDb() {
             async execute(sql, params = []) {
                 const normalized = sql.replace(/\s+/g, ' ').trim();
                 data.sqlSeen.push(normalized);
+                data.executions.push({ sql: normalized, params: clone(params) });
                 if (!data.executedByConnection.has(connectionId)) data.executedByConnection.set(connectionId, []);
                 data.executedByConnection.get(connectionId).push(normalized);
                 if (data.failReconcileQuery && normalized.startsWith('SELECT learner_id, status, answers_hash')) {
@@ -74,14 +76,35 @@ function makeDb() {
                 if (normalized.startsWith('SELECT concept_id FROM concept')) {
                     return [[...new Set(params.map(Number))].filter(id => state.concepts.has(id)).map(concept_id => ({ concept_id }))];
                 }
+                if (normalized.startsWith('SELECT a.assessment_id AS assessmentId')) {
+                    const [learnerId, conceptId] = params;
+                    const evidence = state.results.flatMap(result => {
+                        if (data.omitEvidence || Number(result.concept_id) !== Number(conceptId)) return [];
+                        const assessment = state.assessments.find(row => Number(row.assessment_id) === Number(result.assessment_id));
+                        if (!assessment || Number(assessment.learner_id) !== Number(learnerId)) return [];
+                        return [{
+                            assessmentId: assessment.assessment_id,
+                            score: String(result.score),
+                            assessmentDate: assessment.assessment_date,
+                            questionCount: result.question_count,
+                            correctCount: result.correct_count,
+                            timestampProvenance: assessment.timestamp_provenance
+                        }];
+                    });
+                    return [evidence];
+                }
                 if (normalized.startsWith('INSERT INTO assessment')) {
-                    const [learner_id, overall_score, quiz_attempt_id] = params;
+                    const [learner_id, overall_score, quiz_attempt_id, timestamp_provenance] = params;
                     if (state.assessments.some(row => row.quiz_attempt_id === quiz_attempt_id)) {
                         const error = new Error('duplicate quiz attempt');
                         error.code = 'ER_DUP_ENTRY';
                         throw error;
                     }
-                    const row = { assessment_id: state.nextAssessmentId++, learner_id, overall_score, quiz_attempt_id };
+                    const row = {
+                        assessment_id: state.nextAssessmentId++, learner_id, overall_score,
+                        quiz_attempt_id, timestamp_provenance,
+                        assessment_date: clone(data.assessmentDateForInsert)
+                    };
                     state.assessments.push(row);
                     return [{ insertId: row.assessment_id }];
                 }
@@ -217,6 +240,8 @@ test('successful submission stores one assessment and same-answer retry replays 
     assert.deepEqual(replay.response, first.response);
     assert.equal(data.assessments.length, 1);
     assert.equal(data.results.length, 2);
+    assert.equal(data.assessments[0].timestamp_provenance, 'utc');
+    assert.match(data.sqlSeen.find(sql => sql.startsWith('INSERT INTO assessment')), /timestamp_provenance/);
     assert.deepEqual(data.results.map(({ concept_id, score, question_count, correct_count }) => ({
         concept_id, score, question_count, correct_count
     })), [
@@ -224,6 +249,41 @@ test('successful submission stores one assessment and same-answer retry replays 
         { concept_id: 12, score: 100, question_count: 1, correct_count: 1 }
     ]);
     assert.equal(data.attempts.get(QUIZ_ID).status, 'submitted');
+});
+
+test('mastery recomputation includes NULL-date unknown history and explicitly scopes each evidence query', async () => {
+    const { db, data } = makeDb();
+    const asOf = new Date('2026-11-21T12:00:00.000Z');
+    data.assessmentDateForInsert = asOf;
+    data.assessments.push({
+        assessment_id: 77,
+        learner_id: 7,
+        overall_score: 100,
+        quiz_attempt_id: null,
+        assessment_date: null,
+        timestamp_provenance: 'unknown'
+    });
+    data.results.push({
+        result_id: 501,
+        assessment_id: 77,
+        concept_id: 11,
+        score: '100.00',
+        question_count: null,
+        correct_count: null
+    });
+    const service = createQuizAttemptService({ db, now: () => asOf });
+    await makeAttempt(service, { expiresAt: new Date(asOf.getTime() + 60_000) });
+    const result = await service.submitAttempt({ quizId: QUIZ_ID, learnerId: 7, answers: ANSWERS });
+
+    const cachedMastery = data.learningPath.get('7:11').mastery_level;
+    const responseMastery = result.response.conceptResults.find(item => item.conceptId === 11).masteryLevel;
+    assert.equal(cachedMastery, 66.6667);
+    assert.equal(cachedMastery.toFixed(4), responseMastery.toFixed(4));
+    assert.equal(data.learningPath.get('7:12').mastery_level.toFixed(4), '100.0000');
+    const evidenceQueries = data.executions.filter(entry => entry.sql.startsWith('SELECT a.assessment_id AS assessmentId'));
+    assert.deepEqual(evidenceQueries.map(entry => entry.params), [[7, 11], [7, 12]]);
+    assert.ok(evidenceQueries.every(({ sql }) => /WHERE a\.learner_id = \? AND qr\.concept_id = \?/.test(sql)));
+    assert.ok(evidenceQueries.every(({ sql }) => /a\.timestamp_provenance AS timestampProvenance/.test(sql)));
 });
 
 test('per-concept evidence stores all-correct and zero-correct counts with matching percentages', async () => {
@@ -265,6 +325,14 @@ test('evidence validator rejects invalid count combinations and preserves percen
 test('new submissions preserve historical quiz_result rows without backfilling counts', async () => {
     const { db, data } = makeDb();
     const historicalRow = { result_id: 501, assessment_id: 77, concept_id: 11, score: 66.67, question_count: null, correct_count: null };
+    data.assessments.push({
+        assessment_id: 77,
+        learner_id: 7,
+        overall_score: 66.67,
+        quiz_attempt_id: null,
+        assessment_date: null,
+        timestamp_provenance: 'unknown'
+    });
     data.results.push(structuredClone(historicalRow));
     const service = createQuizAttemptService({ db });
     await makeAttempt(service);
@@ -373,6 +441,36 @@ test('evidence persistence failure rolls back assessment, evidence and attempt c
     assert.equal(data.assessments.length, 0);
     assert.equal(data.results.length, 0);
     assert.equal(data.attempts.get(QUIZ_ID).status, 'open');
+});
+
+test('evidence query failure, invalid historical evidence, and missing evidence each roll back all writes', async t => {
+    const cases = [
+        ['evidence query failure', data => { data.failSql = 'FROM quiz_result AS qr'; }],
+        ['invalid historical provenance', data => {
+            data.assessments.push({
+                assessment_id: 77, learner_id: 7, overall_score: 90, quiz_attempt_id: null,
+                assessment_date: new Date(), timestamp_provenance: 'legacy'
+            });
+            data.results.push({
+                result_id: 501, assessment_id: 77, concept_id: 11, score: 90,
+                question_count: 2, correct_count: 2
+            });
+        }],
+        ['no evidence after insertion', data => { data.omitEvidence = true; }]
+    ];
+    for (const [name, setup] of cases) {
+        await t.test(name, async () => {
+            const { db, data } = makeDb();
+            setup(data);
+            const service = createQuizAttemptService({ db });
+            await makeAttempt(service);
+            await assert.rejects(service.submitAttempt({ quizId: QUIZ_ID, learnerId: 7, answers: ANSWERS }));
+            assert.equal(data.assessments.filter(row => row.quiz_attempt_id === QUIZ_ID).length, 0);
+            assert.equal(data.results.filter(row => row.assessment_id !== 77).length, 0);
+            assert.equal(data.learningPath.size, 0);
+            assert.equal(data.attempts.get(QUIZ_ID).status, 'open');
+        });
+    }
 });
 
 test('attempt completion update must affect exactly one row or all writes roll back', async () => {

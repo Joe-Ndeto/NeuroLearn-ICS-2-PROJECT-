@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const mysql = require('../config/mysql');
+const { calculateMastery } = require('./masteryCalculator');
 
 class QuizAttemptError extends Error {
     constructor(status, message, code) {
@@ -48,6 +49,41 @@ function calculateConceptEvidence(group) {
         questionCount: group.total,
         correctCount: group.correct,
         score
+    };
+}
+
+function databaseInteger(value, fieldName) {
+    if (Number.isSafeInteger(value) && value >= 0) return value;
+    if (typeof value === 'string' && /^\d+$/.test(value)) {
+        const parsed = Number(value);
+        if (Number.isSafeInteger(parsed)) return parsed;
+    }
+    throw new Error(`Database ${fieldName} is invalid.`);
+}
+
+function databaseScore(value) {
+    const validNumericString = typeof value === 'string' && /^(?:\d+)(?:\.\d+)?$/.test(value);
+    if (typeof value !== 'number' && !validNumericString) {
+        throw new Error('Database assessment score is invalid.');
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+        throw new Error('Database assessment score is invalid.');
+    }
+    return parsed;
+}
+
+function mapMasteryObservation(row) {
+    if (!row || (row.timestampProvenance !== 'utc' && row.timestampProvenance !== 'unknown')) {
+        throw new Error('Database assessment timestamp provenance is invalid.');
+    }
+    return {
+        assessmentId: databaseInteger(row.assessmentId, 'assessment ID'),
+        score: databaseScore(row.score),
+        assessmentDate: row.assessmentDate,
+        questionCount: row.questionCount === null ? null : databaseInteger(row.questionCount, 'question count'),
+        correctCount: row.correctCount === null ? null : databaseInteger(row.correctCount, 'correct count'),
+        timestampProvenance: row.timestampProvenance
     };
 }
 
@@ -212,11 +248,11 @@ function createQuizAttemptService({ db = mysql, now = () => new Date() } = {}) {
             }));
 
             const [assessment] = await connection.execute(
-                `INSERT INTO assessment (learner_id, overall_score, quiz_attempt_id)
-                 VALUES (?, ?, ?)`,
-                [learnerId, overallScore, quizId]
+                `INSERT INTO assessment
+                    (learner_id, overall_score, quiz_attempt_id, timestamp_provenance)
+                 VALUES (?, ?, ?, ?)`,
+                [learnerId, overallScore, quizId, 'utc']
             );
-            const conceptResults = [];
             for (const { conceptId, questionCount, correctCount: conceptCorrectCount, score } of scoredConcepts) {
                 await connection.execute(
                     `INSERT INTO quiz_result
@@ -224,15 +260,39 @@ function createQuizAttemptService({ db = mysql, now = () => new Date() } = {}) {
                      VALUES (?, ?, ?, ?, ?)`,
                     [assessment.insertId, conceptId, score, questionCount, conceptCorrectCount]
                 );
-                // Temporary M7B-2A behavior: M7B-2B will replace latest-score mastery.
+            }
+
+            const conceptResults = [];
+            const asOf = now();
+            for (const { conceptId, score } of scoredConcepts) {
+                const [evidenceRows] = await connection.execute(
+                    `SELECT a.assessment_id AS assessmentId,
+                            qr.score AS score,
+                            a.assessment_date AS assessmentDate,
+                            qr.question_count AS questionCount,
+                            qr.correct_count AS correctCount,
+                            a.timestamp_provenance AS timestampProvenance
+                     FROM quiz_result AS qr
+                     JOIN assessment AS a ON a.assessment_id = qr.assessment_id
+                     WHERE a.learner_id = ? AND qr.concept_id = ?
+                     ORDER BY a.assessment_date, a.assessment_id, qr.result_id`,
+                    [learnerId, conceptId]
+                );
+                if (evidenceRows.length === 0) {
+                    throw new Error('Assessment evidence is missing after quiz result insertion.');
+                }
+                const mastery = calculateMastery(evidenceRows.map(mapMasteryObservation), { asOf });
+                if (mastery.mastery === null) {
+                    throw new Error('Assessment evidence did not produce a mastery score.');
+                }
                 await connection.execute(
                     `INSERT INTO learning_path (learner_id, concept_id, mastery_level)
                      VALUES (?, ?, ?)
                      ON DUPLICATE KEY UPDATE mastery_level = VALUES(mastery_level)`,
-                    [learnerId, conceptId, score]
+                    [learnerId, conceptId, mastery.mastery]
                 );
                 const conceptName = questions.find(question => question.conceptId === conceptId)?.conceptName || `Concept ${conceptId}`;
-                conceptResults.push({ conceptId, conceptName, score, masteryLevel: score, needsRevision: score < 60 });
+                conceptResults.push({ conceptId, conceptName, score, masteryLevel: mastery.mastery, needsRevision: score < 60 });
             }
 
             const assessedIds = [...grouped.keys()];
