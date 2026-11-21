@@ -124,6 +124,9 @@ CREATE TABLE quiz_result (
     assessment_id INT NOT NULL,
     concept_id INT NOT NULL,
     score DECIMAL(5,2) NOT NULL,
+    -- NULL preserves historical unknown evidence; only new submissions have exact counts.
+    question_count INT UNSIGNED NULL,
+    correct_count INT UNSIGNED NULL,
     FOREIGN KEY (assessment_id) REFERENCES assessment(assessment_id),
     FOREIGN KEY (concept_id) REFERENCES concept(concept_id)
 );

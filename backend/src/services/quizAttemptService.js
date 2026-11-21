@@ -35,6 +35,22 @@ function canonicalizeAnswers(answers) {
     return { answers: normalized, hash };
 }
 
+function calculateConceptEvidence(group) {
+    const mysqlUnsignedIntMax = 4294967295;
+    if (!group || !Number.isSafeInteger(group.total) || group.total <= 0 ||
+        group.total > mysqlUnsignedIntMax || !Number.isSafeInteger(group.correct) ||
+        group.correct < 0 || group.correct > group.total || group.correct > mysqlUnsignedIntMax) {
+        throw new Error('Quiz concept evidence counts are invalid.');
+    }
+
+    const score = Number(((group.correct / group.total) * 100).toFixed(2));
+    return {
+        questionCount: group.total,
+        correctCount: group.correct,
+        score
+    };
+}
+
 function createQuizAttemptService({ db = mysql, now = () => new Date() } = {}) {
     async function createAttempt({ quizId, learnerId, documentId, questions, expiresAt }) {
         await db.execute(
@@ -187,18 +203,26 @@ function createQuizAttemptService({ db = mysql, now = () => new Date() } = {}) {
             });
             const overallScore = Number(((correctCount / questions.length) * 100).toFixed(2));
 
+            // Validate and calculate all per-concept evidence before the first
+            // persistent write, keeping score rounding consistent with counts.
+            const scoredConcepts = [...grouped.entries()].map(([conceptId, group]) => ({
+                conceptId,
+                group,
+                ...calculateConceptEvidence(group)
+            }));
+
             const [assessment] = await connection.execute(
                 `INSERT INTO assessment (learner_id, overall_score, quiz_attempt_id)
                  VALUES (?, ?, ?)`,
                 [learnerId, overallScore, quizId]
             );
             const conceptResults = [];
-            for (const [conceptId, group] of grouped) {
-                const score = Number(((group.correct / group.total) * 100).toFixed(2));
+            for (const { conceptId, questionCount, correctCount: conceptCorrectCount, score } of scoredConcepts) {
                 await connection.execute(
-                    `INSERT INTO quiz_result (assessment_id, concept_id, score)
-                     VALUES (?, ?, ?)`,
-                    [assessment.insertId, conceptId, score]
+                    `INSERT INTO quiz_result
+                        (assessment_id, concept_id, score, question_count, correct_count)
+                     VALUES (?, ?, ?, ?, ?)`,
+                    [assessment.insertId, conceptId, score, questionCount, conceptCorrectCount]
                 );
                 // Temporary M7B-2A behavior: M7B-2B will replace latest-score mastery.
                 await connection.execute(
@@ -284,4 +308,4 @@ function createQuizAttemptService({ db = mysql, now = () => new Date() } = {}) {
 }
 
 const service = createQuizAttemptService();
-module.exports = { ...service, createQuizAttemptService, canonicalizeAnswers, QuizAttemptError };
+module.exports = { ...service, createQuizAttemptService, canonicalizeAnswers, calculateConceptEvidence, QuizAttemptError };

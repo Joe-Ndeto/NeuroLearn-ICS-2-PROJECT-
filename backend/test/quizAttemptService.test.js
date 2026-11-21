@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createQuizAttemptService, canonicalizeAnswers } = require('../src/services/quizAttemptService');
+const { createQuizAttemptService, canonicalizeAnswers, calculateConceptEvidence } = require('../src/services/quizAttemptService');
 
 const QUIZ_ID = '9f7b2ab2-61f9-4f20-b8be-5d013caaf332';
 const QUESTIONS = [
@@ -86,8 +86,8 @@ function makeDb() {
                     return [{ insertId: row.assessment_id }];
                 }
                 if (normalized.startsWith('INSERT INTO quiz_result')) {
-                    const [assessment_id, concept_id, score] = params;
-                    state.results.push({ assessment_id, concept_id, score });
+                    const [assessment_id, concept_id, score, question_count, correct_count] = params;
+                    state.results.push({ assessment_id, concept_id, score, question_count, correct_count });
                     return [{ affectedRows: 1 }];
                 }
                 if (normalized.startsWith('INSERT INTO learning_path')) {
@@ -217,7 +217,60 @@ test('successful submission stores one assessment and same-answer retry replays 
     assert.deepEqual(replay.response, first.response);
     assert.equal(data.assessments.length, 1);
     assert.equal(data.results.length, 2);
+    assert.deepEqual(data.results.map(({ concept_id, score, question_count, correct_count }) => ({
+        concept_id, score, question_count, correct_count
+    })), [
+        { concept_id: 11, score: 50, question_count: 2, correct_count: 1 },
+        { concept_id: 12, score: 100, question_count: 1, correct_count: 1 }
+    ]);
     assert.equal(data.attempts.get(QUIZ_ID).status, 'submitted');
+});
+
+test('per-concept evidence stores all-correct and zero-correct counts with matching percentages', async () => {
+    const { db, data } = makeDb();
+    const service = createQuizAttemptService({ db });
+    await makeAttempt(service);
+    const answers = [
+        { questionIndex: 0, selectedAnswer: 'B' },
+        { questionIndex: 1, selectedAnswer: 'C' },
+        { questionIndex: 2, selectedAnswer: 'E' }
+    ];
+    await service.submitAttempt({ quizId: QUIZ_ID, learnerId: 7, answers });
+    assert.deepEqual(data.results.map(({ concept_id, score, question_count, correct_count }) => ({
+        concept_id, score, question_count, correct_count
+    })), [
+        { concept_id: 11, score: 0, question_count: 2, correct_count: 0 },
+        { concept_id: 12, score: 100, question_count: 1, correct_count: 1 }
+    ]);
+});
+
+test('evidence validator rejects invalid count combinations and preserves percentage rounding', () => {
+    for (const group of [
+        { total: 0, correct: 0 },
+        { total: -1, correct: 0 },
+        { total: 1.5, correct: 1 },
+        { total: 2, correct: -1 },
+        { total: 2, correct: 3 },
+        { total: Number.MAX_SAFE_INTEGER + 1, correct: 0 }
+    ]) {
+        assert.throws(() => calculateConceptEvidence(group), /evidence counts are invalid/);
+    }
+    assert.deepEqual(calculateConceptEvidence({ total: 3, correct: 2 }), {
+        questionCount: 3,
+        correctCount: 2,
+        score: 66.67
+    });
+});
+
+test('new submissions preserve historical quiz_result rows without backfilling counts', async () => {
+    const { db, data } = makeDb();
+    const historicalRow = { result_id: 501, assessment_id: 77, concept_id: 11, score: 66.67, question_count: null, correct_count: null };
+    data.results.push(structuredClone(historicalRow));
+    const service = createQuizAttemptService({ db });
+    await makeAttempt(service);
+    await service.submitAttempt({ quizId: QUIZ_ID, learnerId: 7, answers: ANSWERS });
+    assert.deepEqual(data.results[0], historicalRow);
+    assert.deepEqual(data.results.slice(1).map(row => [row.question_count, row.correct_count]), [[2, 1], [1, 1]]);
 });
 
 test('changed answers after successful submission conflict without replacing history', async () => {
@@ -308,6 +361,17 @@ test('transaction failure rolls back assessment, results, mastery, recommendatio
     assert.equal(data.assessments.length, 0);
     assert.equal(data.results.length, 0);
     assert.equal(data.learningPath.size, 0);
+    assert.equal(data.attempts.get(QUIZ_ID).status, 'open');
+});
+
+test('evidence persistence failure rolls back assessment, evidence and attempt completion', async () => {
+    const { db, data } = makeDb();
+    const service = createQuizAttemptService({ db });
+    await makeAttempt(service);
+    data.failSql = 'question_count';
+    await assert.rejects(service.submitAttempt({ quizId: QUIZ_ID, learnerId: 7, answers: ANSWERS }));
+    assert.equal(data.assessments.length, 0);
+    assert.equal(data.results.length, 0);
     assert.equal(data.attempts.get(QUIZ_ID).status, 'open');
 });
 
