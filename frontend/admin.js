@@ -44,6 +44,7 @@ async function initializeAdminDashboard() {
     if (name && result.learner.username) name.textContent = result.learner.username;
 
     window.NeuroLearnAdminSubmissions.initializeAdminSubmissionReview({ document, api });
+    window.NeuroLearnAdminSubmissions.initializeCourseManagement({ document, api });
     window.NeuroLearnSyncOperations.initializeKnowledgeSyncOperations({ document, api });
     const isSubmissionDetail = Boolean(new URLSearchParams(window.location.search).get('submission'));
     document.getElementById('admin-sync-operations').hidden = isSubmissionDetail;

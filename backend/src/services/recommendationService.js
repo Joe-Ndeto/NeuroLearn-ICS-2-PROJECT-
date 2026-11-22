@@ -7,11 +7,12 @@ const DOMAIN_COURSE_NAME = 'database concepts';
 const COURSE_ID_PATTERN = /^COURSE-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 class RecommendationServiceError extends Error {
-    constructor(code, message, status = 503) {
+    constructor(code, message, status = 503, cause = null) {
         super(message);
         this.name = 'RecommendationServiceError';
         this.code = code;
         this.status = status;
+        if (cause) this.cause = cause;
     }
 }
 
@@ -154,12 +155,43 @@ function sameSet(left, right) {
     return left.size === right.size && [...left].every(value => right.has(value));
 }
 
+function getCourseClosure(candidateId, rows) {
+    const incoming = new Map();
+    for (const row of rows) {
+        const prerequisiteId = positiveInteger(row.prerequisiteCourseId, 'prerequisite course ID');
+        const targetId = positiveInteger(row.targetCourseId, 'target course ID');
+        const relationshipId = positiveInteger(row.relationshipId, 'course prerequisite ID');
+        if (!incoming.has(targetId)) incoming.set(targetId, []);
+        incoming.get(targetId).push({ prerequisiteId, relationshipId });
+    }
+    const active = new Set();
+    const visited = new Set();
+    const ancestors = new Set();
+    const relationshipIds = new Set();
+    function visit(courseId) {
+        if (active.has(courseId)) throw new RecommendationServiceError('COURSE_PREREQUISITE_CYCLE', 'Canonical course prerequisites contain a cycle.', 503);
+        if (visited.has(courseId)) return;
+        active.add(courseId);
+        for (const edge of incoming.get(courseId) || []) {
+            ancestors.add(edge.prerequisiteId);
+            relationshipIds.add(edge.relationshipId);
+            visit(edge.prerequisiteId);
+        }
+        active.delete(courseId);
+        visited.add(courseId);
+    }
+    visit(candidateId);
+    if (ancestors.has(candidateId)) throw new RecommendationServiceError('COURSE_PREREQUISITE_CYCLE', 'A course cannot be its own prerequisite.', 503);
+    return { ancestors, relationshipIds };
+}
+
 function createRecommendationService({
     mysql: injectedMysql = null,
     getNeo4jSession = null,
     asOf = () => new Date(),
     ranker = rankRecommendations,
-    graphReader = null
+    graphReader = null,
+    courseGraphReader = null
 } = {}) {
     const mysql = injectedMysql || require('../config/mysql');
     if (!mysql || typeof mysql.getConnection !== 'function') {
@@ -175,6 +207,7 @@ function createRecommendationService({
     if (graphReader !== null && typeof graphReader !== 'function') {
         throw new TypeError('graphReader must be a function.');
     }
+    if (courseGraphReader !== null && typeof courseGraphReader !== 'function') throw new TypeError('courseGraphReader must be a function.');
 
     const readGraph = async (candidateGraphIds, courseId) => {
         if (graphReader) {
@@ -184,6 +217,14 @@ function createRecommendationService({
         const options = { courseId };
         if (getNeo4jSession) options.getSessionFactory = getNeo4jSession;
         return getPrerequisiteClosure(candidateGraphIds, options);
+    };
+
+    const readCourseGraph = async courseIds => {
+        if (courseGraphReader) return courseGraphReader(courseIds, { getSessionFactory: getNeo4jSession || undefined });
+        const { getCoursePrerequisiteClosure } = require('./knowledgeGraphService');
+        const options = {};
+        if (getNeo4jSession) options.getSessionFactory = getNeo4jSession;
+        return getCoursePrerequisiteClosure(courseIds, options);
     };
 
     async function readCanonicalSnapshot(courseId, learnerId) {
@@ -225,6 +266,41 @@ function createRecommendationService({
                  ORDER BY c.concept_id`,
                 [courseId]
             );
+            const [courseRows] = await connection.execute(
+                'SELECT course_id AS courseId, graph_course_id AS graphCourseId, title FROM course WHERE graph_course_id = ?',
+                [courseId]
+            );
+            if (courseRows.length !== 1) throw new RecommendationServiceError('COURSE_NOT_CANONICAL', 'The requested course is not available in the canonical course catalogue.', 503);
+            const canonicalCourseId = positiveInteger(courseRows[0].courseId, 'course ID');
+            const [coursePrerequisiteRows] = await connection.execute(
+                `SELECT course_prerequisite_id AS relationshipId,
+                        prerequisite_course_id AS prerequisiteCourseId,
+                        target_course_id AS targetCourseId
+                 FROM course_prerequisite WHERE is_active = TRUE`,
+                []
+            );
+            const courseClosure = getCourseClosure(canonicalCourseId, coursePrerequisiteRows);
+            const relevantCourseIds = [...courseClosure.ancestors, canonicalCourseId].sort((a, b) => a - b);
+            const [relevantCourseRows] = await connection.execute(
+                `SELECT course_id AS courseId, graph_course_id AS graphCourseId, title
+                 FROM course WHERE course_id IN (${relevantCourseIds.map(() => '?').join(',')})`,
+                relevantCourseIds
+            );
+            if (relevantCourseRows.length !== relevantCourseIds.length) throw new RecommendationServiceError('MISSING_CANONICAL_COURSE', 'A prerequisite course has no canonical record.', 503);
+            const coursesById = new Map(relevantCourseRows.map(row => [positiveInteger(row.courseId, 'course ID'), row]));
+            const courseGraphIds = relevantCourseIds.map(id => coursesById.get(id).graphCourseId);
+            if (courseGraphIds.some(id => typeof id !== 'string' || !COURSE_ID_PATTERN.test(id))) throw new RecommendationServiceError('INVALID_COURSE_ASSOCIATION', 'A prerequisite course graph mapping is invalid.', 503);
+            const [courseConceptRows] = await connection.execute(
+                `SELECT cc.course_graph_id AS courseGraphId, c.concept_id AS conceptId
+                 FROM concept_course AS cc INNER JOIN concept AS c ON c.concept_id = cc.concept_id
+                 WHERE cc.course_graph_id IN (${courseGraphIds.map(() => '?').join(',')})`,
+                courseGraphIds
+            );
+            const conceptsByCourseGraphId = new Map(courseGraphIds.map(id => [id, new Set()]));
+            for (const row of courseConceptRows) {
+                if (!conceptsByCourseGraphId.has(row.courseGraphId)) throw new RecommendationServiceError('INVALID_COURSE_ASSOCIATION', 'A course association is inconsistent.', 503);
+                conceptsByCourseGraphId.get(row.courseGraphId).add(positiveInteger(row.conceptId, 'course concept ID'));
+            }
             const [conceptRows] = await connection.execute(
                 `SELECT concept_id AS conceptId, concept_name AS conceptName,
                         graph_concept_id AS graphConceptId
@@ -290,6 +366,12 @@ function createRecommendationService({
                 for (const relationshipId of closure.relationshipIds) relevantPrerequisiteRowIds.add(relationshipId);
             }
 
+            for (const courseIdInClosure of relevantCourseIds) {
+                for (const conceptId of conceptsByCourseGraphId.get(coursesById.get(courseIdInClosure).graphCourseId)) {
+                    relevantConceptIds.add(conceptId);
+                }
+            }
+
             const unresolvedClauses = [];
             const unresolvedParams = [];
             if (relevantConceptIds.size) {
@@ -300,6 +382,14 @@ function createRecommendationService({
             if (relevantPrerequisiteRowIds.size) {
                 const ids = [...relevantPrerequisiteRowIds];
                 unresolvedClauses.push(`(canonical_record_type = 'PREREQUISITE' AND canonical_record_id IN (${ids.map(() => '?').join(',')}))`);
+                unresolvedParams.push(...ids);
+            }
+            const courseTaskIds = [...relevantCourseIds];
+            unresolvedClauses.push(`(canonical_record_type = 'COURSE' AND canonical_record_id IN (${courseTaskIds.map(() => '?').join(',')}))`);
+            unresolvedParams.push(...courseTaskIds);
+            if (courseClosure.relationshipIds.size) {
+                const ids = [...courseClosure.relationshipIds];
+                unresolvedClauses.push(`(canonical_record_type = 'COURSE_PREREQUISITE' AND canonical_record_id IN (${ids.map(() => '?').join(',')}))`);
                 unresolvedParams.push(...ids);
             }
             if (unresolvedClauses.length) {
@@ -351,7 +441,14 @@ function createRecommendationService({
                 conceptIdByGraphId,
                 canonicalClosures,
                 relevantConceptIds,
-                evidenceRows
+                evidenceRows,
+                courseId: canonicalCourseId,
+                courseGraphIds,
+                relevantCourseIds,
+                coursesById,
+                courseClosure,
+                coursePrerequisiteRows,
+                conceptsByCourseGraphId
             };
         } catch (error) {
             primaryError = error;
@@ -365,22 +462,32 @@ function createRecommendationService({
                 }
             }
             if (error instanceof RecommendationServiceError) throw error;
-            throw new RecommendationServiceError('RECOMMENDATION_DATA_UNAVAILABLE', 'Learner recommendation data is unavailable.', 503);
+            throw new RecommendationServiceError(
+                'RECOMMENDATION_DATA_UNAVAILABLE',
+                'Learner recommendation data is unavailable.',
+                503,
+                error
+            );
         } finally {
             if (connectionReusable) {
                 try {
                     connection.release();
-                } catch {
+                } catch (error) {
                     destroyConnection();
                     if (!primaryError && transactionCommitted) {
-                        throw new RecommendationServiceError('RECOMMENDATION_DATA_UNAVAILABLE', 'Learner recommendation data is unavailable.', 503);
+                        throw new RecommendationServiceError(
+                            'RECOMMENDATION_DATA_UNAVAILABLE',
+                            'Learner recommendation data is unavailable.',
+                            503,
+                            error
+                        );
                     }
                 }
             }
         }
     }
 
-    async function getRecommendationsForLearner({ learnerId, courseId } = {}) {
+    async function getRecommendationResultForLearner({ learnerId, courseId } = {}) {
         const numericLearnerId = Number(learnerId);
         if (!Number.isSafeInteger(numericLearnerId) || numericLearnerId < 1) {
             throw new RecommendationServiceError('INVALID_LEARNER_ID', 'A valid learner ID is required.', 400);
@@ -395,9 +502,14 @@ function createRecommendationService({
             graph = await readGraph(snapshot.candidates.map(candidate => candidate.graphConceptId), courseId);
         } catch (error) {
             if (error?.code === 'COURSE_NOT_FOUND') {
-                throw new RecommendationServiceError('COURSE_NOT_FOUND', 'The requested course was not found.', 404);
+                throw new RecommendationServiceError('COURSE_NOT_FOUND', 'The requested course was not found.', 404, error);
             }
-            throw new RecommendationServiceError('PREREQUISITE_GRAPH_UNAVAILABLE', 'Prerequisite graph data is unavailable.', 503);
+            throw new RecommendationServiceError(
+                'PREREQUISITE_GRAPH_UNAVAILABLE',
+                'Prerequisite graph data is unavailable.',
+                503,
+                error
+            );
         }
         if (!graph || graph.courseId !== courseId || typeof graph.courseName !== 'string' ||
             graph.courseName.trim().toLowerCase() !== DOMAIN_COURSE_NAME) {
@@ -426,6 +538,26 @@ function createRecommendationService({
         }
         if (graphClosures.size !== snapshot.candidates.length) {
             throw new RecommendationServiceError('MISSING_CANDIDATE_NODE', 'A candidate concept is missing from the knowledge graph.', 503);
+        }
+
+        let courseGraphClosures;
+        try {
+            courseGraphClosures = await readCourseGraph(snapshot.courseGraphIds);
+        } catch (error) {
+            throw new RecommendationServiceError('COURSE_PREREQUISITE_GRAPH_UNAVAILABLE', 'Course prerequisite data is unavailable.', 503, error);
+        }
+        if (!(courseGraphClosures instanceof Map) || courseGraphClosures.size !== snapshot.courseGraphIds.length) {
+            throw new RecommendationServiceError('COURSE_PREREQUISITE_GRAPH_INVALID', 'Course prerequisite graph data is invalid.', 503);
+        }
+        for (const canonicalCourseId of snapshot.relevantCourseIds) {
+            const course = snapshot.coursesById.get(canonicalCourseId);
+            const actual = courseGraphClosures.get(course.graphCourseId);
+            const expected = new Set([...getCourseClosure(canonicalCourseId, snapshot.coursePrerequisiteRows).ancestors]
+                .map(id => snapshot.coursesById.get(id)?.graphCourseId));
+            if (!Array.isArray(actual) || actual.some(id => typeof id !== 'string' || !COURSE_ID_PATTERN.test(id)) ||
+                [...expected].some(id => typeof id !== 'string') || !sameSet(expected, new Set(actual))) {
+                throw new RecommendationServiceError('COURSE_PREREQUISITE_MISMATCH', 'MySQL and Neo4j course prerequisite closures differ.', 503);
+            }
         }
 
         const relevantGraphIds = new Set(snapshot.candidates.map(candidate => candidate.graphConceptId));
@@ -511,10 +643,57 @@ function createRecommendationService({
                 }))
             };
         });
-        return ranker(candidateInputs, { asOf: referenceTime });
+        const prerequisiteCourseStatus = [...snapshot.courseClosure.ancestors].sort((a, b) => a - b).map(prerequisiteCourseId => {
+            const prerequisiteCourse = snapshot.coursesById.get(prerequisiteCourseId);
+            const conceptIds = [...(snapshot.conceptsByCourseGraphId.get(prerequisiteCourse.graphCourseId) || [])];
+            const satisfied = conceptIds.length > 0 && conceptIds.every(conceptId => {
+                const mastery = calculateMastery(evidenceByConceptId.get(conceptId) || [], { asOf: referenceTime });
+                return mastery.evidenceStatus === 'EVIDENCE_QUALIFIED' && mastery.mastery !== null && mastery.mastery >= 80;
+            });
+            return { courseId: prerequisiteCourseId, title: prerequisiteCourse.title, satisfied };
+        });
+        const coursePrerequisitesSatisfied = prerequisiteCourseStatus.every(item => item.satisfied);
+        const recommendations = coursePrerequisitesSatisfied
+            ? ranker(candidateInputs, { asOf: referenceTime })
+            : [];
+        const concepts = candidateInputs.map(candidate => ({
+            conceptId: candidate.conceptId,
+            conceptName: candidate.conceptName,
+            mastery: candidate.mastery,
+            evidenceStatus: candidate.evidenceStatus,
+            assessmentCount: candidate.assessmentHistory.length,
+            prerequisites: candidate.prerequisites.map(prerequisite => ({
+                conceptId: prerequisite.conceptId,
+                conceptName: prerequisite.conceptName,
+                mastery: prerequisite.mastery,
+                evidenceStatus: prerequisite.evidenceStatus,
+                satisfied: prerequisite.evidenceStatus === 'EVIDENCE_QUALIFIED' &&
+                    prerequisite.mastery !== null && prerequisite.mastery >= 80
+            }))
+        }));
+        const courseConceptIds = new Set(snapshot.candidates.map(candidate => candidate.conceptId));
+        const hasCourseAssessmentHistory = snapshot.evidenceRows.some(row =>
+            courseConceptIds.has(positiveInteger(row.conceptId, 'evidence concept ID'))
+        );
+        return {
+            recommendationMode: coursePrerequisitesSatisfied
+                ? hasCourseAssessmentHistory ? 'adaptive' : 'cold_start'
+                : 'course_prerequisite_blocked',
+            recommendations,
+            concepts,
+            coursePrerequisiteEligibility: {
+                eligible: coursePrerequisitesSatisfied,
+                prerequisites: prerequisiteCourseStatus
+            }
+        };
     }
 
-    return { getRecommendationsForLearner };
+    async function getRecommendationsForLearner(input) {
+        const result = await getRecommendationResultForLearner(input);
+        return result.recommendations;
+    }
+
+    return { getRecommendationsForLearner, getRecommendationResultForLearner };
 }
 
 module.exports = { createRecommendationService, RecommendationServiceError };

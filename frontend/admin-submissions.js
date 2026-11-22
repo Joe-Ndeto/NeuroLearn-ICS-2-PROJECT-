@@ -4,7 +4,9 @@
     const TYPE_LABELS = Object.freeze({
         CONCEPT: 'Concept',
         RESOURCE: 'Learning resource',
-        PREREQUISITE: 'Prerequisite'
+        PREREQUISITE: 'Prerequisite',
+        COURSE: 'Course',
+        COURSE_PREREQUISITE: 'Course prerequisite'
     });
     const STATUS_LABELS = Object.freeze({
         pending: 'Pending review',
@@ -28,6 +30,10 @@
         switch (submission?.submissionType) {
             case 'CONCEPT':
                 return safeText(data.name, 'Concept submission');
+            case 'COURSE':
+                return safeText(data.title, 'Course proposal');
+            case 'COURSE_PREREQUISITE':
+                return 'Administrator course prerequisite update';
             case 'RESOURCE':
                 return safeText(data.title, 'Learning resource submission');
             case 'PREREQUISITE':
@@ -107,15 +113,24 @@
             if (data.difficultyLevel) {
                 addDetailRow(rows, document, 'Previously submitted difficulty suggestion', data.difficultyLevel);
             }
+        } else if (submission.submissionType === 'COURSE') {
+            addDetailRow(rows, document, 'Proposed course title', data.title);
+            addDetailRow(rows, document, 'Description', data.description || 'Not provided');
         } else if (submission.submissionType === 'RESOURCE') {
             addDetailRow(rows, document, 'Resource title', data.title);
             addDetailRow(rows, document, 'Resource type', data.type);
+            if (data.courseId) addDetailRow(rows, document, 'Selected course', data.courseId);
+            if (data.conceptId !== undefined && data.conceptId !== null) {
+                addDetailRow(rows, document, 'Selected concept', data.conceptName
+                    ? `${data.conceptName} (${data.conceptId})`
+                    : data.conceptId);
+            }
             if (data.document?.originalName) {
                 addDetailRow(rows, document, 'Submitted document', `${data.document.originalName} (${data.document.documentType || 'Document'})`);
             } else if (data.url) {
                 addDetailRow(rows, document, 'Resource URL', data.url);
             }
-            if (data.conceptId !== undefined && data.conceptId !== null) {
+            if (data.conceptId !== undefined && data.conceptId !== null && !data.document) {
                 addDetailRow(rows, document, 'Historical concept reference', data.conceptId);
             }
         } else if (submission.submissionType === 'PREREQUISITE') {
@@ -228,7 +243,7 @@
         function restoreRoute() {
             const state = routeState(location);
             if (state.status !== null && ['pending', 'approved', 'rejected', ''].includes(state.status)) elements.statusFilter.value = state.status;
-            if (state.type !== null && ['CONCEPT', 'RESOURCE', 'PREREQUISITE', ''].includes(state.type)) elements.typeFilter.value = state.type;
+            if (state.type !== null && ['CONCEPT', 'RESOURCE', 'PREREQUISITE', 'COURSE', 'COURSE_PREREQUISITE', ''].includes(state.type)) elements.typeFilter.value = state.type;
             currentPage = state.page;
             if (state.submissionId) return openDetail(state.submissionId, { updateUrl: false });
             setView(false);
@@ -268,6 +283,10 @@
                 elements.approve.disabled = actionPending || !isPending || elements.resourceConcept.disabled || !elements.resourceConcept.value;
             } else if (selectedSubmission?.submissionType === 'RESOURCE') {
                 elements.approve.disabled = true;
+            }
+            if (selectedSubmission?.submissionType === 'COURSE') {
+                elements.approve.disabled = actionPending || !isPending ||
+                    !CONCEPT_DIFFICULTY_LEVELS.includes(elements.courseDifficulty?.value);
             }
         }
 
@@ -317,7 +336,7 @@
             }
         }
 
-        async function loadCourses({ force = false, confirmedCourse = null } = {}) {
+        async function loadCourses({ force = false } = {}) {
             if (!force && elements.courses.dataset.loaded === 'true') return;
             elements.courseField.hidden = false;
             elements.courses.disabled = true;
@@ -328,10 +347,6 @@
                 const result = await api.get('/kg/courses', { cache: 'no-store' });
                 if (!Array.isArray(result?.courses)) throw new Error('invalid_response');
                 const availableCourses = [...result.courses];
-                if (isDatabaseConceptsCourse(confirmedCourse) && hasValidCourseId(confirmedCourse) &&
-                    !availableCourses.some(course => course?.course_id === confirmedCourse.course_id)) {
-                    availableCourses.push(confirmedCourse);
-                }
                 const namedDomainCourses = availableCourses.filter(isDatabaseConceptsCourse);
                 const domainCourses = namedDomainCourses.filter(hasValidCourseId);
                 const count = populateCourseSelect(elements.courses, domainCourses, document);
@@ -350,54 +365,6 @@
                 setMessage(elements.courseMessage, `${errorMessage(error, 'Course lookup failed.')} Use Refresh queue or reopen this submission to retry the lookup.`, 'error');
             }
             updateActionAvailability();
-        }
-
-        let courseProvisionPending = false;
-        async function provisionDatabaseConceptsCourse(event) {
-            event.preventDefault();
-            if (courseProvisionPending) return;
-            const name = elements.provisionName?.value?.trim();
-            if (!name) {
-                setMessage(elements.provisionMessage, 'Enter the course name.', 'error');
-                return;
-            }
-            courseProvisionPending = true;
-            if (elements.provisionSubmit) {
-                root.NeuroLearnLoading?.setButtonLoading(elements.provisionSubmit, true, 'Checking course');
-                if (!root.NeuroLearnLoading) elements.provisionSubmit.disabled = true;
-            }
-            setMessage(elements.provisionMessage, 'Checking existing courses…', 'info');
-            try {
-                const listed = await api.get('/kg/courses', { cache: 'no-store' });
-                if (!Array.isArray(listed?.courses)) throw new Error('Course lookup returned an invalid response.');
-                let course = listed.courses.find(isDatabaseConceptsCourse);
-                let created = false;
-                if (!course) {
-                    setMessage(elements.provisionMessage, 'Creating the required course…', 'info');
-                    const result = await api.post('/kg/courses', { name });
-                    if (result?.success !== true || !isDatabaseConceptsCourse(result.course) || !hasValidCourseId(result.course)) {
-                        throw new Error('The server did not confirm that the Database Concepts course is available.');
-                    }
-                    course = result.course;
-                    created = result.created === true;
-                }
-                await loadCourses({ force: true, confirmedCourse: course });
-                if (elements.courses.dataset.loaded === 'true') {
-                    setMessage(elements.provisionMessage, created
-                        ? 'Database Concepts course created and added to the concept review selector. Select it when reviewing a concept.'
-                        : 'Existing Database Concepts course found and refreshed in the concept review selector. Select it when reviewing a concept.', 'success');
-                } else {
-                    setMessage(elements.provisionMessage, 'A matching course exists, but it is not currently valid for approval. The course was preserved; contact the system administrator.', 'error');
-                }
-            } catch (error) {
-                setMessage(elements.provisionMessage, errorMessage(error, 'Course provisioning failed. No course was confirmed; retry to check again.'), 'error');
-            } finally {
-                courseProvisionPending = false;
-                if (elements.provisionSubmit) {
-                    root.NeuroLearnLoading?.setButtonLoading(elements.provisionSubmit, false);
-                    if (!root.NeuroLearnLoading) elements.provisionSubmit.disabled = false;
-                }
-            }
         }
 
         let domainConceptsLoaded = false;
@@ -431,15 +398,27 @@
             }
             domainConceptsLoading = (async () => {
                 try {
-                    const result = await api.get('/admin/submissions/database-concepts');
-                    if (!Array.isArray(result?.concepts)) throw new Error('invalid_response');
+                    const submittedResource = selectedSubmission?.submissionType === 'RESOURCE'
+                        ? selectedSubmission.submissionData
+                        : null;
+                    const hasSubmittedAssociation = submittedResource?.document &&
+                        submittedResource.courseId && submittedResource.conceptId != null;
+                    const domainResult = await api.get('/admin/submissions/database-concepts');
+                    const resourceResult = hasSubmittedAssociation
+                        ? await api.get(`/admin/submissions/courses/${encodeURIComponent(submittedResource.courseId)}/concepts`)
+                        : domainResult;
+                    if (!Array.isArray(domainResult?.concepts) || !Array.isArray(resourceResult?.concepts)) throw new Error('invalid_response');
+                    const resourceConceptId = hasSubmittedAssociation ? String(submittedResource.conceptId) : null;
+                    const availableConcepts = hasSubmittedAssociation
+                        ? resourceResult.concepts.filter(concept => String(concept.concept_id) === resourceConceptId)
+                        : domainResult.concepts;
                     for (const select of selects) {
                         const placeholder = document.createElement('option');
                         placeholder.value = '';
-                        placeholder.textContent = 'Select a Database Concept';
+                        placeholder.textContent = 'Select an approved concept';
                         placeholder.disabled = true;
                         placeholder.selected = true;
-                        const options = result.concepts.map(concept => {
+                        const options = (select === elements.resourceConcept ? availableConcepts : domainResult.concepts).map(concept => {
                             const option = document.createElement('option');
                             option.value = String(concept.concept_id);
                             option.textContent = `${safeText(concept.name, 'Concept')} (${concept.concept_id})`;
@@ -449,27 +428,33 @@
                         select.value = '';
                         select.disabled = options.length === 0;
                     }
-                    domainConceptCount = result.concepts.length;
+                    domainConceptCount = domainResult.concepts.length;
                     domainConceptsLoaded = true;
                     updatePrerequisiteAvailability();
                     if (elements.prerequisiteMessage) setMessage(elements.prerequisiteMessage,
-                        result.concepts.length < 2
+                        domainResult.concepts.length < 2
                             ? 'At least two approved Database Concepts must exist before prerequisites can be created.'
                             : '', 'info');
                     if (elements.resourceConceptMessage) {
-                        let emptyMessage = 'No approved Database Concepts are available yet. Approve a concept first.';
-                        if (result.domainAvailable === false || result.emptyReason === 'course_missing') {
+                        let emptyMessage = hasSubmittedAssociation
+                            ? 'The submitted course and concept association is no longer available. Reject this resource or restore the approved association before retrying.'
+                            : 'No approved Database Concepts are available yet. Approve a concept first.';
+                        if (domainResult.domainAvailable === false || domainResult.emptyReason === 'course_missing') {
                             emptyMessage = 'The Database Concepts course is unavailable. Use Manage Database Concepts course above, then retry.';
-                        } else if (result.emptyReason === 'missing_course_association') {
+                        } else if (domainResult.emptyReason === 'missing_course_association') {
                             emptyMessage = 'Approved concepts exist, but none are associated with the Database Concepts course. Review the course association before approving resources.';
-                        } else if (result.emptyReason === 'missing_graph_concept_id') {
+                        } else if (domainResult.emptyReason === 'missing_graph_concept_id') {
                             emptyMessage = 'Database Concepts are associated with the course, but their graph concept IDs are missing. Resolve the concept mapping before approving resources.';
                         }
                         setMessage(elements.resourceConceptMessage,
-                            result.concepts.length ? 'Select the approved Database Concept this document belongs to.' : emptyMessage,
-                            result.concepts.length ? 'info' : 'error');
+                            availableConcepts.length
+                                ? hasSubmittedAssociation
+                                    ? 'Confirm the approved concept selected by the student. Its course association cannot be changed during review.'
+                                    : 'Select the approved Database Concept this document belongs to.'
+                                : emptyMessage,
+                            availableConcepts.length ? 'info' : 'error');
                     }
-                    return result.concepts.length > 0;
+                    return availableConcepts.length > 0;
                 } catch (error) {
                     if (elements.resourceConceptMessage) setMessage(elements.resourceConceptMessage,
                         'Concept lookup failed. Check database and course availability, then reopen this submission to retry.', 'error');
@@ -497,9 +482,14 @@
             elements.actions.hidden = true;
             elements.courseField.hidden = true;
             if (elements.difficultyField) elements.difficultyField.hidden = true;
+            if (elements.courseDifficultyField) elements.courseDifficultyField.hidden = true;
             if (elements.difficulty) {
                 elements.difficulty.value = '';
                 elements.difficulty.disabled = true;
+            }
+            if (elements.courseDifficulty) {
+                elements.courseDifficulty.value = '';
+                elements.courseDifficulty.disabled = true;
             }
             if (elements.resourceConceptField) elements.resourceConceptField.hidden = true;
             if (elements.resourceConcept) {
@@ -522,6 +512,10 @@
                         if (elements.difficultyField) elements.difficultyField.hidden = false;
                         if (elements.difficulty) elements.difficulty.disabled = false;
                         await loadCourses();
+                    }
+                    else if (selectedSubmission.submissionType === 'COURSE') {
+                        if (elements.courseDifficultyField) elements.courseDifficultyField.hidden = false;
+                        if (elements.courseDifficulty) elements.courseDifficulty.disabled = false;
                     }
                     else if (selectedSubmission.submissionType === 'RESOURCE') {
                         if (elements.resourceConceptField) elements.resourceConceptField.hidden = false;
@@ -552,12 +546,12 @@
                 setMessage(elements.actionMessage, 'Select at least one existing course before approving this concept.', 'error');
                 return;
             }
-            const difficultyLevel = selectedSubmission.submissionType === 'CONCEPT'
-                ? elements.difficulty?.value
-                : undefined;
-            if (status === 'approved' && selectedSubmission.submissionType === 'CONCEPT' &&
+            const difficultyLevel = selectedSubmission.submissionType === 'COURSE'
+                ? elements.courseDifficulty?.value
+                : selectedSubmission.submissionType === 'CONCEPT' ? elements.difficulty?.value : undefined;
+            if (status === 'approved' && ['CONCEPT', 'COURSE'].includes(selectedSubmission.submissionType) &&
                 !CONCEPT_DIFFICULTY_LEVELS.includes(difficultyLevel)) {
-                setMessage(elements.actionMessage, 'Choose a valid difficulty level before approving this concept.', 'error');
+                setMessage(elements.actionMessage, 'Choose a valid difficulty level before approving this submission.', 'error');
                 return;
             }
             const selectedResourceConcept = selectedSubmission.submissionType === 'RESOURCE'
@@ -585,9 +579,11 @@
             const actionButton = status === 'approved' ? elements.approve : elements.reject;
             root.NeuroLearnLoading?.setButtonLoading(actionButton, true, status === 'approved' ? 'Approving' : 'Rejecting');
             const payload = { reviewNotes: reviewNotes || null };
+            if (status === 'approved' && ['CONCEPT', 'COURSE'].includes(selectedSubmission.submissionType)) {
+                payload.difficultyLevel = difficultyLevel;
+            }
             if (status === 'approved' && selectedSubmission.submissionType === 'CONCEPT') {
                 payload.courseIds = courseIds;
-                payload.difficultyLevel = difficultyLevel;
             }
             if (status === 'approved' && selectedSubmission.submissionType === 'RESOURCE') payload.conceptId = selectedResourceConcept;
             try {
@@ -623,10 +619,10 @@
         elements.closeDetail.addEventListener('click', backToQueue);
         elements.courses.addEventListener('change', updateActionAvailability);
         elements.difficulty?.addEventListener('change', updateActionAvailability);
+        elements.courseDifficulty?.addEventListener('change', updateActionAvailability);
         elements.resourceConcept?.addEventListener('change', updateActionAvailability);
         elements.approve.addEventListener('click', () => review('approved'));
         elements.reject.addEventListener('click', () => review('rejected'));
-        elements.provisionForm?.addEventListener('submit', provisionDatabaseConceptsCourse);
 
         if (elements.prerequisiteForm) {
             elements.prerequisiteBefore?.addEventListener('change', updatePrerequisiteAvailability);
@@ -680,6 +676,190 @@
         };
     }
 
+    function initializeCourseManagement({ document, api }) {
+        const section = document.getElementById('admin-course-management');
+        if (!section || !api.isAdministrator()) return null;
+        const get = id => document.getElementById(id);
+        const courseSelect = get('admin-course-select');
+        const title = get('admin-course-title');
+        const description = get('admin-course-description');
+        const difficulty = get('admin-course-difficulty');
+        const editForm = get('admin-course-edit-form');
+        const save = get('admin-course-save');
+        const prerequisiteSelect = get('admin-course-prerequisite-select');
+        const add = get('admin-course-prerequisite-add');
+        const list = get('admin-course-prerequisite-list');
+        const conceptSelect = get('admin-course-concept-select');
+        const conceptAdd = get('admin-course-concept-add');
+        const conceptList = get('admin-course-concept-list');
+        const message = get('admin-course-management-message');
+        let courses = [];
+        let pending = false;
+        let conceptOptionsAvailable = false;
+        const selected = () => courses.find(course => String(course.courseId) === courseSelect.value) || null;
+        const option = (value, text) => {
+            const item = document.createElement('option');
+            item.value = String(value);
+            item.textContent = String(text);
+            return item;
+        };
+        const show = (text, state = 'info') => {
+            message.textContent = text;
+            message.dataset.state = state;
+            message.hidden = !text;
+        };
+        const updateButtons = () => {
+            const course = selected();
+            save.disabled = pending || !course || !title.value.trim() || !difficulty.value;
+            add.disabled = pending || !course || !prerequisiteSelect.value || prerequisiteSelect.value === courseSelect.value;
+            if (conceptSelect) conceptSelect.disabled = pending || !selected() || !conceptOptionsAvailable;
+            if (conceptAdd) conceptAdd.disabled = pending || !selected() || !conceptSelect?.value;
+        };
+        function renderSelected() {
+            const course = selected();
+            title.value = course?.title || '';
+            description.value = course?.description || '';
+            difficulty.value = course?.difficultyLevel || '';
+            list.replaceChildren();
+            for (const prerequisite of course?.prerequisites || []) {
+                const row = document.createElement('p');
+                row.append(document.createTextNode(`${prerequisite.title} must be completed first. `));
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'btn-outline';
+                remove.textContent = 'Remove';
+                remove.addEventListener('click', () => changePrerequisite(prerequisite.courseId, 'remove'));
+                row.append(remove);
+                list.append(row);
+            }
+            if (conceptList) {
+                conceptList.replaceChildren();
+                const concepts = course?.concepts || [];
+                if (!concepts.length) {
+                    const empty = document.createElement('p');
+                    empty.textContent = 'No concepts are assigned to this course yet.';
+                    conceptList.append(empty);
+                } else {
+                    for (const concept of concepts) {
+                        const item = document.createElement('p');
+                        item.textContent = concept.name;
+                        conceptList.append(item);
+                    }
+                }
+            }
+            updateButtons();
+        }
+        async function load(keepId = courseSelect.value) {
+            pending = true;
+            updateButtons();
+            try {
+                const result = await api.get('/admin/submissions/courses');
+                if (result?.success !== true || !Array.isArray(result.courses)) throw new Error('invalid_response');
+                courses = result.courses;
+                const options = courses.map(course => option(course.courseId, course.title));
+                courseSelect.replaceChildren(option('', 'Select an approved course'), ...options);
+                prerequisiteSelect.replaceChildren(option('', 'Select an approved course'), ...options.map(item => item.cloneNode(true)));
+                courseSelect.value = courses.some(course => String(course.courseId) === String(keepId)) ? String(keepId) : '';
+                renderSelected();
+                if (!courses.length) show('No approved courses yet. Approve a student course proposal first.');
+                else if (message.dataset.state !== 'success') show('');
+                await loadConceptOptions(selected());
+            } catch {
+                show('Approved courses could not be loaded. Please retry.', 'error');
+            } finally {
+                pending = false;
+                updateButtons();
+            }
+        }
+        async function loadConceptOptions(course) {
+            if (!conceptSelect) return;
+            conceptOptionsAvailable = false;
+            conceptSelect.replaceChildren(option('', course ? 'Loading approved concepts…' : 'Select a course first'));
+            conceptSelect.disabled = true;
+            if (!course) return;
+            try {
+                const result = await api.get(`/admin/submissions/courses/${encodeURIComponent(course.courseId)}/concept-management`);
+                if (result?.success !== true || !Array.isArray(result.assigned) || !Array.isArray(result.available)) {
+                    throw new Error('invalid_response');
+                }
+                course.concepts = result.assigned;
+                renderSelected();
+                conceptSelect.replaceChildren(option('', result.available.length ? 'Select an approved concept' : 'No additional approved concepts'),
+                    ...result.available.map(concept => option(concept.conceptId, concept.name)));
+                conceptOptionsAvailable = result.available.length > 0;
+            } catch {
+                conceptSelect.replaceChildren(option('', 'Concept lookup failed'));
+                show('Approved concepts could not be loaded. Select the course again to retry.', 'error');
+            }
+            updateButtons();
+        }
+        async function changePrerequisite(prerequisiteId, action) {
+            const course = selected();
+            if (!course || pending) return;
+            pending = true;
+            updateButtons();
+            try {
+                if (action === 'add') {
+                    await api.post(`/admin/submissions/courses/${encodeURIComponent(course.courseId)}/prerequisites`, { prerequisiteCourseId: prerequisiteId });
+                } else {
+                    await api.delete(`/admin/submissions/courses/${encodeURIComponent(course.courseId)}/prerequisites/${encodeURIComponent(prerequisiteId)}`);
+                }
+                show(`Course prerequisite ${action === 'add' ? 'added' : 'removed'} and queued for synchronization.`, 'success');
+                await load(course.courseId);
+            } catch (error) {
+                show(error.message || 'Course prerequisite could not be updated.', 'error');
+            } finally {
+                pending = false;
+                updateButtons();
+            }
+        }
+        async function assignConcept() {
+            const course = selected();
+            if (!course || !conceptSelect?.value || pending) return;
+            pending = true;
+            updateButtons();
+            try {
+                await api.post(`/admin/submissions/courses/${encodeURIComponent(course.courseId)}/concepts`, {
+                    conceptId: conceptSelect.value
+                });
+                show('Concept assigned to this course and queued for graph synchronization.', 'success');
+                await load(course.courseId);
+            } catch (error) {
+                show(error.message || 'The concept could not be assigned to this course.', 'error');
+            } finally {
+                pending = false;
+                updateButtons();
+            }
+        }
+        courseSelect.addEventListener('change', () => {
+            renderSelected();
+            loadConceptOptions(selected());
+        });
+        prerequisiteSelect.addEventListener('change', updateButtons);
+        title.addEventListener('input', updateButtons);
+        difficulty.addEventListener('change', updateButtons);
+        editForm.addEventListener('submit', async event => {
+            event.preventDefault();
+            const course = selected();
+            if (!course || pending) return;
+            pending = true;
+            updateButtons();
+            try {
+                await api.patch(`/admin/submissions/courses/${encodeURIComponent(course.courseId)}`, {
+                    title: title.value, description: description.value, difficultyLevel: difficulty.value
+                });
+                show('Course details saved and queued for synchronization.', 'success');
+                await load(course.courseId);
+            } catch (error) { show(error.message || 'Course details could not be saved.', 'error'); }
+            finally { pending = false; updateButtons(); }
+        });
+        add.addEventListener('click', () => changePrerequisite(prerequisiteSelect.value, 'add'));
+        conceptSelect?.addEventListener('change', updateButtons);
+        conceptAdd?.addEventListener('click', assignConcept);
+        load();
+        return { load };
+    }
+
     function initializeAdminSubmissionReview({ document, api, confirmFn = root.confirm?.bind(root) }) {
         const section = document.getElementById('admin-submission-review');
         if (!section) return null;
@@ -715,6 +895,8 @@
                 courseField: get('admin-review-course-field'),
                 difficultyField: get('admin-review-difficulty-field'),
                 difficulty: get('admin-review-difficulty'),
+                courseDifficultyField: get('admin-review-course-difficulty-field'),
+                courseDifficulty: get('admin-review-course-difficulty'),
                 courses: get('admin-review-courses'),
                 courseMessage: get('admin-review-courses-message'),
                 actionMessage: get('admin-review-action-message'),
@@ -732,10 +914,6 @@
                 prerequisiteAfter: get('admin-prerequisite-after'),
                 prerequisiteSubmit: get('admin-prerequisite-submit'),
                 prerequisiteMessage: get('admin-prerequisite-message'),
-                provisionForm: get('admin-course-provision-form'),
-                provisionName: get('admin-course-provision-name'),
-                provisionSubmit: get('admin-course-provision-submit'),
-                provisionMessage: get('admin-course-provision-message')
             }
         });
         controller.restoreRoute();
@@ -744,6 +922,7 @@
 
     const api = {
         createAdminReviewController,
+        initializeCourseManagement,
         formatDate,
         initializeAdminSubmissionReview,
         populateCourseSelect,

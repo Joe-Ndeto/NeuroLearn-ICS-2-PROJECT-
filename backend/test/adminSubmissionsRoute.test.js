@@ -20,7 +20,11 @@ const detailResult = listResult.submissions[0];
 let listOptions;
 let prerequisitePayload;
 let reviewPayload;
+let conceptAssignmentPayload;
 let workerHealthResult = { status: 200, body: { success: true, health: { state: 'running', started: true, processAlive: true } } };
+class MockCourseManagementError extends Error {
+    constructor(code, message, status = 400) { super(message); this.code = code; this.status = status; }
+}
 
 Module._load = function (request, parent, isMain) {
     if (parent.filename === routePath && request === '../middleware/authenticateToken') return authenticateMiddleware;
@@ -38,6 +42,9 @@ Module._load = function (request, parent, isMain) {
                 emptyReason: null,
                 diagnostics: { totalConcepts: 1, domainAssociatedConcepts: 1, graphMappedConcepts: 1, missingGraphConceptId: 0 }
             }; },
+            async getCourseConceptOptions(courseId) {
+                return courseId === 'COURSE-1' ? [{ concept_id: 11, name: 'Joins' }] : [];
+            },
             async createAdministratorPrerequisiteSubmission(payload) {
                 prerequisitePayload = payload;
                 return { submissionId: 44, submissionType: 'PREREQUISITE' };
@@ -54,6 +61,26 @@ Module._load = function (request, parent, isMain) {
                 return { outcome: 'retried', sync: { status: 'pending', attemptCount: 4, lastError: 'previous error', completedAt: null, updatedAt: 'updated-now' } };
             },
             async reviewPendingSubmission(payload) { reviewPayload = payload; return { outcome: 'reviewed', submission: { submissionId: 12 } }; }
+        };
+    }
+    if (parent.filename === routePath && request === '../services/courseManagementService') {
+        return {
+            CourseManagementError: MockCourseManagementError,
+            createCourseManagementService() {
+                return {
+                    async listApprovedCourses() { return []; },
+                    async updateCourse() { return {}; },
+                    async changePrerequisite() { return {}; },
+                    async getConceptAssignmentOptions(courseId) {
+                        if (courseId !== '7') throw new MockCourseManagementError('COURSE_NOT_FOUND', 'Approved course not found.', 404);
+                        return { assigned: [{ conceptId: 1, name: 'Relational Algebra' }], available: [{ conceptId: 2, name: 'Transactions' }] };
+                    },
+                    async assignConceptToCourse(payload) {
+                        conceptAssignmentPayload = payload;
+                        return { courseId: 7, conceptId: Number(payload.conceptId), syncStatus: 'pending' };
+                    }
+                };
+            }
         };
     }
     return originalLoad.call(this, request, parent, isMain);
@@ -132,6 +159,15 @@ test('admin database concept options and prerequisite proposals are served throu
     assert.equal(optionsResponse.body.diagnostics.graphMappedConcepts, 1);
 
     const proposalRoute = findRoute('/prerequisites', 'post');
+    const deniedProposalResponse = responseStub();
+    let deniedProposalHandlerCalled = false;
+    adminMiddleware({ user: { role: 'student' } }, deniedProposalResponse, () => {
+        deniedProposalHandlerCalled = true;
+        proposalRoute.stack.at(-1).handle({ body: { prerequisiteId: '2', targetId: '3' }, user: { learner_id: 7 } }, responseStub());
+    });
+    assert.equal(deniedProposalResponse.statusCode, 403);
+    assert.equal(deniedProposalHandlerCalled, false);
+
     const proposalResponse = responseStub();
     await proposalRoute.stack.at(-1).handle({
         body: { prerequisiteId: '2', targetId: '3' },
@@ -145,9 +181,43 @@ test('admin database concept options and prerequisite proposals are served throu
     assert.equal(invalidResponse.statusCode, 400);
 });
 
+test('administrator course-concept options are scoped to the canonical course', async () => {
+    const route = findRoute('/courses/:courseId/concepts', 'get');
+    const response = responseStub();
+    await route.stack.at(-1).handle({ params: { courseId: 'COURSE-1' } }, response);
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.body.concepts, [{ concept_id: 11, name: 'Joins' }]);
+});
+
+test('administrator concept management lists assignments and uses authenticated admin identity for assignment', async () => {
+    const optionsRoute = findRoute('/courses/:courseId/concept-management', 'get');
+    const optionsResponse = responseStub();
+    await optionsRoute.stack.at(-1).handle({ params: { courseId: '7' } }, optionsResponse);
+    assert.equal(optionsResponse.body.success, true);
+    assert.deepEqual(optionsResponse.body.assigned, [{ conceptId: 1, name: 'Relational Algebra' }]);
+    assert.deepEqual(optionsResponse.body.available, [{ conceptId: 2, name: 'Transactions' }]);
+
+    const assignRoute = findRoute('/courses/:courseId/concepts', 'post');
+    const assignResponse = responseStub();
+    await assignRoute.stack.at(-1).handle({
+        params: { courseId: '7' }, body: { conceptId: '2' }, user: { learner_id: 55, role: 'admin' }
+    }, assignResponse);
+    assert.equal(assignResponse.statusCode, 201);
+    assert.deepEqual(conceptAssignmentPayload, { courseId: '7', conceptId: '2', adminId: 55 });
+});
+
+
 test('administrator authorization middleware remains mounted for the router', () => {
     assert.equal(router.stack[0].handle, authenticateMiddleware);
     assert.equal(router.stack[1].handle, adminMiddleware);
+    const unauthorized = responseStub();
+    let nextCalled = false;
+    router.stack[0].handle({}, unauthorized, () => { nextCalled = true; });
+    assert.equal(unauthorized.statusCode, 401);
+    assert.equal(nextCalled, false);
+    const studentDenied = responseStub();
+    adminMiddleware({ user: { role: 'student' } }, studentDenied, () => assert.fail('student must not receive admin routes'));
+    assert.equal(studentDenied.statusCode, 403);
 });
 
 test('worker health proxy is behind authentication and administrator authorization', async () => {

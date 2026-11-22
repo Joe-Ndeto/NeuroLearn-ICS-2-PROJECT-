@@ -10,6 +10,7 @@ const knowledgeGraphRoute = require('./routes/knowledgeGraph');
 const submissionsRoute = require('./routes/submissions');
 const adminSubmissionsRoute = require('./routes/adminSubmissions');
 const recommendationsRoute = require('./routes/recommendations');
+const learnerProgressRoute = require('./routes/learnerProgress');
 
 const app = express();
 
@@ -23,6 +24,7 @@ app.use('/api/kg', knowledgeGraphRoute);
 app.use('/api/submissions', submissionsRoute);
 app.use('/api/admin/submissions', adminSubmissionsRoute);
 app.use('/api/recommendations', recommendationsRoute);
+app.use('/api/learners', learnerProgressRoute);
 
 app.get('/', (req, res) => {
     res.json({

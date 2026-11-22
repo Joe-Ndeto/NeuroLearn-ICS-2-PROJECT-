@@ -68,27 +68,14 @@ router.get('/concepts', async (req, res) => {
 // Only administrators can create courses.
 router.post('/courses', requireAdmin, async (req, res) => {
     if (!validateRequired(req.body, ['name'])) {
-        return res.status(400).json({
-            success: false,
-            message: 'Course name is required.'
-        });
+        return res.status(400).json({ success: false, message: 'Course name is required.' });
     }
-
     try {
         const result = await provisionCourse(req.body);
-
-        res.status(result.created ? 201 : 200).json({
-            success: true,
-            created: result.created,
-            course: result.course
-        });
+        return res.status(result.created ? 201 : 200).json({ success: true, created: result.created, course: result.course });
     } catch (error) {
-        console.error('[KG] Create course:', error);
-
-        res.status(500).json({
-            success: false,
-            message: 'Failed to create course.'
-        });
+        console.error('[KG] Create course:', error.code || 'course_provision_failed');
+        return res.status(500).json({ success: false, message: 'Failed to create course.' });
     }
 });
 

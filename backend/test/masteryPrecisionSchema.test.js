@@ -25,7 +25,7 @@ test('migration 008 widens only mastery precision and does not recalculate store
 
 test('MySQL documentation includes migration 008 preflight and verification guidance', () => {
     const readme = read('database/mysql/README.md');
-    assert.match(readme, /Migration order is 001 through 008/);
+    assert.match(readme, /Migration order is 001 through 009/);
     assert.match(readme, /learning_path\.mastery_level.*DECIMAL\(5,2\).*nullable.*default `0`/i);
     assert.match(readme, /widening the scale retains existing two-decimal numeric values/i);
     assert.match(readme, /migration 008 is DDL.*backup/i);

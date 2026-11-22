@@ -6,6 +6,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {
     createSubmissionHandler,
+    createResourceIdempotencyKey,
+    clearResourceIdempotencyKey,
     createSubmissionHistory,
     initializeKnowledgeContributions,
     loadConceptOptions,
@@ -100,13 +102,14 @@ test('concept validation sends name and description only; student difficulty is 
     assert.throws(() => validateConceptPayload({ name: 'A', description: 'x'.repeat(5001) }), /5000 characters/);
 });
 
-test('resource validation requires only a title and selected document', () => {
+test('resource validation requires title, approved course, approved concept, and a selected document', () => {
     const file = { name: 'notes.pdf', size: 1200 };
-    const payload = validateResourcePayload({ title: 'Notes', file });
-    assert.deepEqual(payload, { title: 'Notes', type: 'document', file });
-    assert.throws(() => validateResourcePayload({ conceptId: 'C001', title: 'T' }), /Choose a PDF/);
-    assert.throws(() => validateResourcePayload({ title: 'Notes', file: { name: 'notes.exe' } }), /Choose a PDF/);
-    assert.throws(() => validateResourcePayload({ conceptId: 'C001', title: 'x'.repeat(256), file }), /255 characters/);
+    const payload = validateResourcePayload({ title: 'Notes', courseId: 'COURSE-1', conceptId: '11', file });
+    assert.deepEqual(payload, { title: 'Notes', courseId: 'COURSE-1', conceptId: '11', type: 'document', file });
+    assert.throws(() => validateResourcePayload({ title: 'Notes', conceptId: '11', file }), /Approved course is required/);
+    assert.throws(() => validateResourcePayload({ title: 'Notes', courseId: 'COURSE-1', file }), /Approved concept is required/);
+    assert.throws(() => validateResourcePayload({ title: 'Notes', courseId: 'COURSE-1', conceptId: '11', file: { name: 'notes.exe' } }), /Choose a PDF/);
+    assert.throws(() => validateResourcePayload({ courseId: 'COURSE-1', conceptId: '11', title: 'x'.repeat(256), file }), /255 characters/);
 });
 
 test('resource readiness requires a valid title and one of the supported document extensions', () => {
@@ -128,6 +131,13 @@ test('resource button follows title and file changes, locks during upload, prese
         addEventListener(type, callback) { listeners.set(`file:${type}`, callback); }
     };
     const fileName = { textContent: '', hidden: false };
+    const course = createSelect();
+    course.disabled = false;
+    course.addEventListener = (type, callback) => listeners.set(`course:${type}`, callback);
+    const concept = createSelect();
+    concept.disabled = true;
+    concept.addEventListener = (type, callback) => listeners.set(`concept:${type}`, callback);
+    const conceptHelp = { textContent: '' };
     const removeButton = { hidden: true, addEventListener(type, callback) { listeners.set(`remove:${type}`, callback); } };
     const submitButton = { disabled: true, textContent: 'Submit resource' };
     const feedback = createFeedback();
@@ -138,13 +148,16 @@ test('resource button follows title and file changes, locks during upload, prese
     const resourceForm = {
         listeners: {}, querySelector: () => submitButton,
         addEventListener(type, callback) { this.listeners[type] = callback; },
-        reset() { title.value = ''; fileInput.value = ''; fileInput.files = []; this.resetCount = (this.resetCount || 0) + 1; }
+        reset() { title.value = ''; fileInput.value = ''; fileInput.files = []; course.value = ''; concept.value = ''; this.resetCount = (this.resetCount || 0) + 1; }
     };
     const elements = {
         'knowledge-contributions': { hidden: true },
         'concept-submission-form': conceptForm,
         'resource-submission-form': resourceForm,
         'resource-title': title,
+        'resource-course': course,
+        'resource-concept': concept,
+        'resource-concept-help': conceptHelp,
         'resource-file': fileInput,
         'resource-file-name': fileName,
         'resource-file-remove': removeButton,
@@ -154,12 +167,19 @@ test('resource button follows title and file changes, locks during upload, prese
         'concept-description': { value: '' },
         'concept-difficulty': { value: '' }
     };
-    const document = { getElementById: id => elements[id] || null };
+    const document = {
+        getElementById: id => elements[id] || null,
+        createElement(tagName) { assert.equal(tagName, 'option'); return { value: '', textContent: '', disabled: false, selected: false }; }
+    };
     let rejectFirstUpload;
     let calls = 0;
     const requests = [];
     const api = {
         isStudent: () => true,
+        async get(path) {
+            assert.equal(path, '/submissions/resource-options');
+            return { courses: [{ courseId: 'COURSE-1', name: 'Database Concepts', concepts: [{ conceptId: 11, name: 'Normalization' }] }] };
+        },
         post(path, body) {
             calls += 1;
             requests.push({ path, body });
@@ -169,6 +189,11 @@ test('resource button follows title and file changes, locks during upload, prese
     };
 
     initializeKnowledgeContributions({ document, api });
+    await new Promise(resolve => setImmediate(resolve));
+    course.value = 'COURSE-1';
+    listeners.get('course:change')();
+    concept.value = '11';
+    listeners.get('concept:change')();
     assert.equal(submitButton.disabled, true);
     title.value = '   ';
     listeners.get('title:input')();
@@ -184,7 +209,7 @@ test('resource button follows title and file changes, locks during upload, prese
 
     fileInput.files = [new File(['%PDF-1.7'], 'Normalization.PDF', { type: 'application/pdf' })];
     listeners.get('file:change')();
-    assert.equal(submitButton.disabled, false, 'valid title and supported extension enable submission');
+    assert.equal(submitButton.disabled, false, 'valid title, selected course/concept, and supported extension enable submission');
     assert.equal(removeButton.hidden, false);
 
     const submit = resourceForm.listeners.submit;
@@ -199,8 +224,10 @@ test('resource button follows title and file changes, locks during upload, prese
     const requestBody = requests[0].body;
     assert.equal(requests[0].path, '/submissions/resources');
     assert.ok(requestBody instanceof FormData);
-    assert.deepEqual(Array.from(requestBody.keys()), ['title', 'document']);
+    assert.deepEqual(Array.from(requestBody.keys()), ['title', 'courseId', 'conceptId', 'document']);
     assert.equal(requestBody.get('title'), 'Normalization notes');
+    assert.equal(requestBody.get('courseId'), 'COURSE-1');
+    assert.equal(requestBody.get('conceptId'), '11');
     assert.equal(requestBody.get('document').name, 'Normalization.PDF');
 
     rejectFirstUpload(Object.assign(new Error('Rejected'), { status: 400, message: 'Upload rejected.' }));
@@ -221,12 +248,14 @@ test('resource button follows title and file changes, locks during upload, prese
     assert.equal(feedback.dataset.state, 'success');
 });
 
-test('student contribution form contains no course, resource concept, or prerequisite controls', () => {
+test('student contribution form keeps course proposals, selected resource course/concept and no student prerequisite controls', () => {
     const html = fs.readFileSync(path.join(__dirname, '../../frontend/dashboard.html'), 'utf8');
     const script = fs.readFileSync(path.join(__dirname, '../../frontend/knowledge-contributions.js'), 'utf8');
     assert.match(html, /Suggest a Database Concept/);
     assert.match(html, /administrator approval is required/i);
-    assert.doesNotMatch(html, /resource-concept-id|prerequisite-submission-form|admin-review-courses/);
+    assert.match(html, /id="resource-course"/);
+    assert.match(html, /id="resource-concept"/);
+    assert.doesNotMatch(html, /prerequisite-submission-form|admin-review-courses/);
     assert.doesNotMatch(html, /concept-difficulty|Difficulty level/);
     assert.doesNotMatch(script, /difficultyLevel|concept-difficulty/);
     assert.doesNotMatch(script, /endpoint:\s*'\/submissions\/prerequisites'/);
@@ -394,13 +423,49 @@ test('failed multipart resource submission keeps its form and selected file', as
     const handler = createSubmissionHandler({
         api: { async post() { throw Object.assign(new Error('upload rejected'), { status: 400 }); } },
         form, submitButton: createButton(), feedback: createFeedback(), endpoint: '/submissions/resources',
-        buildPayload: () => validateResourcePayload({ conceptId: 'C001', title: 'Notes', file }),
+        buildPayload: () => validateResourcePayload({ courseId: 'COURSE-1', conceptId: '11', title: 'Notes', file }),
         send: async payload => { sent = payload; throw Object.assign(new Error('upload rejected'), { status: 400 }); },
         successMessage: 'done'
     });
     await handler({ preventDefault() {} });
     assert.equal(sent.file, file);
     assert.equal(form.resetCount, 0);
+});
+
+test('resource retry keys persist for unchanged submissions and rotate when the payload changes', () => {
+    const values = new Map();
+    const storage = {
+        getItem(key) { return values.get(key) || null; },
+        setItem(key, value) { values.set(key, value); },
+        removeItem(key) { values.delete(key); }
+    };
+    let generated = 0;
+    const cryptoProvider = { randomUUID() { generated += 1; return `33333333-3333-4333-8333-33333333333${generated}`; } };
+    const file = { name: 'notes.pdf', size: 120, lastModified: 10 };
+    const first = createResourceIdempotencyKey({ title: 'Notes', courseId: 'COURSE-1', conceptId: 11, file, storage, cryptoProvider });
+    const retry = createResourceIdempotencyKey({ title: 'Notes', courseId: 'COURSE-1', conceptId: 11, file: { ...file }, storage, cryptoProvider });
+    const changed = createResourceIdempotencyKey({ title: 'Notes', courseId: 'COURSE-1', conceptId: 12, file, storage, cryptoProvider });
+    assert.equal(retry, first);
+    assert.notEqual(changed, first);
+    assert.equal(generated, 2);
+    clearResourceIdempotencyKey(storage);
+    assert.equal(values.size, 0);
+});
+
+test('history refresh failure does not reverse a confirmed resource submission success', async () => {
+    const form = createForm();
+    const feedback = createFeedback();
+    const handler = createSubmissionHandler({
+        api: { async post() { return { success: true }; } },
+        form, submitButton: createButton(), feedback, endpoint: '/submissions/resources',
+        buildPayload: () => ({ title: 'Notes', file: { name: 'notes.pdf' } }),
+        successMessage: 'Learning resource submitted.',
+        async afterSuccess() { throw new Error('history lookup unavailable'); }
+    });
+    await handler({ preventDefault() {} });
+    assert.equal(form.resetCount, 1);
+    assert.equal(feedback.textContent, 'Learning resource submitted.');
+    assert.equal(feedback.dataset.state, 'success');
 });
 
 test('history renders each supported submission type, review status, and feedback as text', () => {

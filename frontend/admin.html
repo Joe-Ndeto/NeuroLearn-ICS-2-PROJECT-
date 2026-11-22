@@ -35,14 +35,36 @@
             </div>
 
             <section class="admin-submission-review" id="admin-course-management" aria-labelledby="admin-course-management-title">
-                <div class="section-title" id="admin-course-management-title">Manage Database Concepts course</div>
-                <p class="section-subtitle">Provision the required course for concept review. Existing courses are preserved and matching courses are reused.</p>
-                <form id="admin-course-provision-form">
-                    <label for="admin-course-provision-name">Course name</label>
-                    <input id="admin-course-provision-name" name="name" type="text" value="Database Concepts" required maxlength="200" autocomplete="off" readonly>
-                    <button class="btn-primary" id="admin-course-provision-submit" type="submit">Check or create course</button>
-                    <p class="admin-review-message" id="admin-course-provision-message" role="status" aria-live="polite"></p>
+                <div class="section-title" id="admin-course-management-title">Manage approved courses</div>
+                <p class="section-subtitle">Only administrator-approved courses appear in the student catalogue. Course prerequisites are synchronized to the knowledge graph.</p>
+                <label for="admin-course-select">Approved course</label>
+                <select id="admin-course-select"><option value="">Select an approved course</option></select>
+                <form id="admin-course-edit-form" class="admin-course-edit-form">
+                    <label for="admin-course-title">Course title</label>
+                    <input id="admin-course-title" maxlength="200" required>
+                    <label for="admin-course-description">Description</label>
+                    <textarea id="admin-course-description" maxlength="5000" rows="3"></textarea>
+                    <label for="admin-course-difficulty">Difficulty</label>
+                    <select id="admin-course-difficulty" required>
+                        <option value="">Select difficulty</option><option>Beginner</option><option>Intermediate</option><option>Advanced</option>
+                    </select>
+                    <button class="btn-primary" id="admin-course-save" type="submit" disabled>Save course details</button>
                 </form>
+                <div class="admin-course-concepts">
+                    <h3>Concepts in this course</h3>
+                    <div id="admin-course-concept-list" aria-live="polite"></div>
+                    <label for="admin-course-concept-select">Assign an approved concept</label>
+                    <select id="admin-course-concept-select" disabled><option value="">Select an approved concept</option></select>
+                    <button class="btn-outline" id="admin-course-concept-add" type="button" disabled>Assign concept</button>
+                    <p class="section-subtitle">The administrator-selected association is saved in MySQL and queued for graph synchronization.</p>
+                </div>
+                <div class="admin-course-prerequisites">
+                    <label for="admin-course-prerequisite-select">Required course to complete first</label>
+                    <select id="admin-course-prerequisite-select"><option value="">Select an approved course</option></select>
+                    <button class="btn-outline" id="admin-course-prerequisite-add" type="button" disabled>Add prerequisite</button>
+                    <div id="admin-course-prerequisite-list"></div>
+                </div>
+                <p class="admin-review-message" id="admin-course-management-message" role="status" aria-live="polite"></p>
             </section>
 
             <section class="admin-submission-review" id="admin-submission-review" hidden
@@ -66,6 +88,7 @@
                         <option value="CONCEPT">Concept</option>
                         <option value="RESOURCE">Learning resource</option>
                         <option value="PREREQUISITE">Prerequisite</option>
+                        <option value="COURSE">Course</option>
                     </select>
                     <button class="btn-outline" id="admin-review-refresh" type="button">Refresh queue</button>
                 </div>
@@ -112,6 +135,15 @@
                                 <option value="Advanced">Advanced</option>
                             </select>
                             <p class="admin-review-message" id="admin-review-difficulty-message" role="status" aria-live="polite">Choose a difficulty level before approving this concept.</p>
+                        </div>
+                        <div class="admin-review-course-field" id="admin-review-course-difficulty-field" hidden>
+                            <label for="admin-review-course-difficulty">Assign course difficulty <span aria-hidden="true">*</span></label>
+                            <select id="admin-review-course-difficulty" required>
+                                <option value="">Select difficulty</option>
+                                <option value="Beginner">Beginner</option>
+                                <option value="Intermediate">Intermediate</option>
+                                <option value="Advanced">Advanced</option>
+                            </select>
                         </div>
                         <div class="admin-review-course-field" id="admin-review-course-field" hidden>
                             <label for="admin-review-courses">Associate concept with the existing Database Concepts course</label>

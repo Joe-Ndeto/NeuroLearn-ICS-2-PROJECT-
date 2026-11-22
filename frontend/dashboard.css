@@ -302,6 +302,82 @@ header {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
 }
 
+.dashboard-progress-feedback {
+    min-height: 1px;
+    margin: -26px 0 32px;
+    color: var(--text-muted);
+    font-size: 0.88rem;
+}
+
+.dashboard-progress-feedback [hidden] {
+    display: none;
+}
+
+.dashboard-progress-feedback p {
+    margin: 8px 0;
+}
+
+.review-gaps-panel {
+    margin: -14px 0 32px;
+    padding: 22px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+.review-gaps-panel[hidden] {
+    display: none;
+}
+
+.review-gaps-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.review-gaps-heading h2,
+.review-gap-group-title {
+    margin: 0 0 8px;
+    font-size: 1.15rem;
+}
+
+.review-gap-group {
+    margin-top: 20px;
+}
+
+.review-gap-group-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.review-gap-card {
+    min-width: 0;
+    padding: 16px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+}
+
+.review-gap-title {
+    margin: 0 0 10px;
+    overflow-wrap: anywhere;
+}
+
+.review-gap-card p {
+    color: var(--text-muted);
+    font-size: 0.88rem;
+    line-height: 1.5;
+}
+
+.review-gap-action {
+    display: inline-flex;
+    margin-top: 8px;
+    text-decoration: none;
+}
+
 .recommendations-heading {
     display: flex;
     align-items: flex-start;
@@ -349,25 +425,21 @@ header {
     overflow-wrap: anywhere;
 }
 
-.recommendation-metrics {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+.recommendation-status {
+    display: inline-flex;
     margin-bottom: 12px;
-}
-
-.recommendation-metrics span {
-    padding: 4px 8px;
-    border-radius: 7px;
-    background: #f1f5f9;
-    color: var(--text-muted);
+    padding: 5px 9px;
+    border-radius: 999px;
+    background: var(--primary-light);
+    color: var(--primary);
     font-size: 0.78rem;
     font-weight: 600;
 }
 
-.recommendation-metrics .recommendation-priority {
-    background: var(--primary-light);
-    color: var(--primary);
+.recommendation-action {
+    display: inline-flex;
+    margin-top: 16px;
+    text-decoration: none;
 }
 
 .recommendation-explanation,
@@ -375,20 +447,6 @@ header {
     margin: 10px 0 0;
     color: var(--text-muted);
     font-size: 0.87rem;
-    line-height: 1.5;
-    overflow-wrap: anywhere;
-}
-
-.recommendation-prerequisites-title {
-    margin: 16px 0 0;
-    font-size: 0.9rem;
-}
-
-.recommendation-prerequisite-list {
-    margin: 8px 0 0;
-    padding-left: 20px;
-    color: var(--text-muted);
-    font-size: 0.82rem;
     line-height: 1.5;
     overflow-wrap: anywhere;
 }
@@ -1389,6 +1447,14 @@ header {
 @media (max-width: 650px) {
     .student-recommendations {
         padding: 18px;
+    }
+
+    .review-gaps-panel {
+        padding: 18px;
+    }
+
+    .review-gap-group-list {
+        grid-template-columns: 1fr;
     }
 
     .recommendations-heading {

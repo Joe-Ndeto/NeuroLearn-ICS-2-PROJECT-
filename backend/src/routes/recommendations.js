@@ -12,6 +12,36 @@ const router = express.Router();
 const recommendationService = createRecommendationService();
 const DATABASE_CONCEPTS_NAME = 'database concepts';
 
+function sanitizeDiagnostic(value) {
+    return String(value ?? 'unknown')
+        .replace(/(?:bolt(?:\+s)?|neo4j(?:\+s)?|mysql|https?):\/\/[^\s'"<>]+/gi, '[redacted connection string]')
+        .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+        .replace(/\b(?:MYSQL|NEO4J|JWT|GEMINI)_[A-Z0-9_]+\s*[:=]\s*[^\s,;]+/gi, '[redacted environment setting]')
+        .replace(/\b(password|passwd|pwd|secret|token|api[_-]?key|authorization)\b\s*[:=]\s*(['"]?)[^\s,;'"]+/gi, '$1=[redacted]')
+        .replace(/for user\s+['"][^'"]+['"]/gi, 'for user [redacted]')
+        .replace(/[\r\n\t]+/g, ' ')
+        .slice(0, 500);
+}
+
+function logRecommendationFailure(error) {
+    const chain = [];
+    const seen = new Set();
+    let current = error;
+    while (current && typeof current === 'object' && !seen.has(current) && chain.length < 5) {
+        seen.add(current);
+        chain.push({
+            name: sanitizeDiagnostic(current.name || 'Error'),
+            code: current.code === undefined ? null : sanitizeDiagnostic(current.code),
+            message: sanitizeDiagnostic(current.message)
+        });
+        current = current.cause;
+    }
+    if (chain.length === 0) {
+        chain.push({ name: 'Error', code: null, message: sanitizeDiagnostic(error) });
+    }
+    console.error('[Recommendations] Request failed:', JSON.stringify(chain));
+}
+
 function requireStudent(req, res, next) {
     if (req.user?.role !== 'student') {
         return res.status(403).json({
@@ -50,6 +80,21 @@ function serviceErrorResponse(error, res) {
                 message: 'Recommendations are currently available only for Database Concepts.'
             });
         }
+        if (error.code === 'COURSE_NOT_CANONICAL') {
+            return res.status(503).json({
+                success: false,
+                code: error.code,
+                message: 'Database Concepts has not been connected to the approved course catalogue. Ask an administrator to reconcile the course and its approved concept associations.'
+            });
+        }
+        if (error.code === 'COURSE_ASSOCIATION_MISMATCH' || error.code === 'COURSE_PREREQUISITE_MISMATCH' ||
+            error.code === 'PREREQUISITE_CLOSURE_MISMATCH' || error.code === 'KNOWLEDGE_SYNC_PENDING') {
+            return res.status(503).json({
+                success: false,
+                code: error.code,
+                message: 'Course and prerequisite data are not fully synchronized. Please try again later or contact an administrator.'
+            });
+        }
     }
 
     return res.status(503).json({
@@ -67,6 +112,13 @@ router.get('/me', authenticateToken, requireStudent, async (req, res) => {
             const hasMatchingCourse = Array.isArray(courses) && courses.some(item =>
                 typeof item?.name === 'string' && item.name.trim().toLowerCase() === DATABASE_CONCEPTS_NAME
             );
+            if (hasMatchingCourse) {
+                logRecommendationFailure({
+                    name: 'CourseResolutionError',
+                    code: 'COURSE_LOOKUP_FAILED',
+                    message: 'Database Concepts course is duplicated or has no valid course ID.'
+                });
+            }
             return res.status(hasMatchingCourse ? 503 : 404).json({
                 success: false,
                 code: hasMatchingCourse ? 'COURSE_LOOKUP_FAILED' : 'COURSE_NOT_FOUND',
@@ -76,16 +128,20 @@ router.get('/me', authenticateToken, requireStudent, async (req, res) => {
             });
         }
 
-        const recommendations = await recommendationService.getRecommendationsForLearner({
+        const recommendationResult = await recommendationService.getRecommendationResultForLearner({
             learnerId: req.user.learner_id,
             courseId: course.courseId
         });
         return res.status(200).json({
             success: true,
             course,
-            recommendations
+            recommendationMode: recommendationResult.recommendationMode,
+            recommendations: recommendationResult.recommendations,
+            concepts: recommendationResult.concepts,
+            coursePrerequisiteEligibility: recommendationResult.coursePrerequisiteEligibility
         });
     } catch (error) {
+        logRecommendationFailure(error);
         if (error instanceof RecommendationServiceError) {
             return serviceErrorResponse(error, res);
         }

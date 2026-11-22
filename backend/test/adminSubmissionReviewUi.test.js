@@ -29,6 +29,7 @@ class FakeElement {
 
     append(...children) { this.children.push(...children); }
     replaceChildren(...children) { this.children = children; }
+    cloneNode() { const clone = new FakeElement(); clone.value = this.value; clone.textContent = this.textContent; return clone; }
     addEventListener(type, callback) { this.listeners[type] = callback; }
     setAttribute(name, value) { this[name] = value; }
 }
@@ -64,6 +65,8 @@ function createElements() {
         courses: new FakeElement(),
         difficultyField: new FakeElement(),
         difficulty: new FakeElement(),
+        courseDifficultyField: new FakeElement(),
+        courseDifficulty: new FakeElement(),
         courseMessage: new FakeElement(),
         resourceConceptField: new FakeElement(),
         resourceConcept: new FakeElement(),
@@ -74,10 +77,6 @@ function createElements() {
         closeDetail: new FakeElement(),
         pageHeading: new FakeElement(),
         syncSection: new FakeElement(),
-        provisionForm: new FakeElement(),
-        provisionName: new FakeElement(),
-        provisionSubmit: new FakeElement(),
-        provisionMessage: new FakeElement()
     };
     elements.statusFilter.value = 'pending';
     elements.typeFilter.value = '';
@@ -172,6 +171,40 @@ test('confirmed administrator role reveals the review section and loads the queu
     assert.ok(controller);
     assert.equal(ids['admin-submission-review'].hidden, false);
     assert.equal(requestedPath, '/admin/submissions?page=1&limit=20&status=pending');
+});
+
+test('administrator course manager loads assigned concepts and posts an explicit concept-course assignment', async () => {
+    const { initializeCourseManagement } = require('../../frontend/admin-submissions');
+    const ids = Object.fromEntries([
+        'admin-course-management', 'admin-course-select', 'admin-course-title', 'admin-course-description',
+        'admin-course-difficulty', 'admin-course-edit-form', 'admin-course-save',
+        'admin-course-prerequisite-select', 'admin-course-prerequisite-add', 'admin-course-prerequisite-list',
+        'admin-course-concept-select', 'admin-course-concept-add', 'admin-course-concept-list',
+        'admin-course-management-message'
+    ].map(id => [id, new FakeElement()]));
+    const calls = [];
+    const document = { getElementById: id => ids[id] || null, createElement: () => new FakeElement(), createTextNode: text => ({ textContent: text }) };
+    const api = {
+        isAdministrator: () => true,
+        async get(path) {
+            calls.push(['GET', path]);
+            if (path === '/admin/submissions/courses') return { success: true, courses: [{ courseId: 3, title: 'Data Systems', concepts: [] }] };
+            return { success: true, assigned: [{ conceptId: 10, name: 'Relational Algebra' }], available: [{ conceptId: 11, name: 'Transactions' }] };
+        },
+        async post(path, body) { calls.push(['POST', path, body]); return { success: true }; },
+        async patch() {},
+        async delete() {}
+    };
+    const controller = initializeCourseManagement({ document, api });
+    await new Promise(resolve => setImmediate(resolve));
+    await controller.load('3');
+    assert.deepEqual(ids['admin-course-concept-list'].children.map(item => item.textContent), ['Relational Algebra']);
+    ids['admin-course-concept-select'].value = '11';
+    ids['admin-course-concept-select'].listeners.change();
+    assert.equal(ids['admin-course-concept-add'].disabled, false);
+    await ids['admin-course-concept-add'].listeners.click();
+    assert.ok(calls.some(call => call[0] === 'POST' && call[1] === '/admin/submissions/courses/3/concepts' && call[2].conceptId === '11'));
+    assert.equal(ids['admin-course-management-message'].dataset.state, 'success');
 });
 
 test('admin queue uses actual filters and renders concepts, resources, prerequisites, reviewer and separate sync status', async () => {
@@ -373,7 +406,7 @@ test('detail endpoint renders supported submission data, reviewer data, and sync
 test('concept approval requires and sends administrator difficulty with course IDs', async () => {
     const elements = createElements();
     const paths = [];
-    let payload;
+    let approvalPayload;
     let confirmation = '';
     const callsByPath = {
         '/admin/submissions/17': { success: true, submission: submission() },
@@ -387,7 +420,7 @@ test('concept approval requires and sends administrator difficulty with course I
         confirmFn(message) { confirmation = message; return true; },
         api: {
             async get(path) { paths.push(path); return callsByPath[path]; },
-            async patch(path, body) { paths.push(path); payload = body; return { success: true, submission: submission({ status: 'approved' }) }; }
+            async patch(path, body) { paths.push(path); approvalPayload = body; return { success: true, submission: submission({ status: 'approved' }) }; }
         }
     });
     await controller.openDetail(17);
@@ -405,7 +438,7 @@ test('concept approval requires and sends administrator difficulty with course I
     elements.notes.value = 'Looks good';
     await elements.approve.listeners.click();
     assert.match(confirmation, /Approve submission #17/);
-    assert.deepEqual(payload, { reviewNotes: 'Looks good', courseIds: [COURSE_ID], difficultyLevel: 'Advanced' });
+    assert.deepEqual(approvalPayload, { reviewNotes: 'Looks good', courseIds: [COURSE_ID], difficultyLevel: 'Advanced' });
     assert.ok(paths.includes('/admin/submissions/17/approve'));
     assert.equal(elements.queueNotice.textContent, 'Submission approved.');
 });
@@ -446,58 +479,39 @@ test('course load failure keeps concept approval unavailable without creating a 
     assert.match(elements.courseMessage.textContent, /Course lookup failed/i);
 });
 
-test('course provisioning checks first, creates once, and refreshes concept selector without reauthentication', async () => {
+test('course proposal approval requires administrator difficulty and records the canonical course', async () => {
     const elements = createElements();
-    elements.provisionName.value = 'Database Concepts';
     const paths = [];
     let approvalPayload;
-    let courseAvailable = false;
+    const courseSubmission = submission({
+        submissionType: 'COURSE',
+        submissionData: { title: 'Database Foundations', description: 'Core topics' }
+    });
     const { controller } = createController({
         elements,
         api: {
             async get(path) {
                 paths.push(path);
-                if (path === '/kg/courses') {
-                    return { courses: courseAvailable ? [{ course_id: COURSE_ID, name: 'Database Concepts' }] : [] };
-                }
-                if (path === '/admin/submissions/database-concepts') {
-                    return { success: true, domainAvailable: true, concepts: [{ concept_id: 76, name: 'Normalization' }] };
-                }
                 if (path.startsWith('/admin/submissions?page=')) return queueResult([submission()]);
-                return { submission: submission() };
+                return { submission: courseSubmission };
             },
-            async post(path, body) {
+            async patch(path, body) {
                 paths.push(path);
-                assert.deepEqual(body, { name: 'Database Concepts' });
-                // Simulate a stale intermediary GET response: the authoritative
-                // course object in the create response must still reach the selector.
-                return { success: true, created: true, course: { course_id: COURSE_ID, name: 'Database Concepts' } };
-            },
-            async patch(path, payload) {
-                paths.push(path);
-                approvalPayload = payload;
-                return { success: true, submission: submission({ status: 'approved' }) };
+                approvalPayload = body;
+                return { success: true, submission: courseSubmission };
             }
         }
     });
 
     await controller.openDetail(17);
-    await elements.provisionForm.listeners.submit({ preventDefault() {} });
-    assert.deepEqual(paths, ['/admin/submissions/17', '/kg/courses', '/kg/courses', '/kg/courses', '/kg/courses']);
-    assert.equal(elements.courses.dataset.loaded, 'true');
-    assert.equal(elements.courses.children[0].value, COURSE_ID);
-    assert.equal(elements.courses.disabled, false);
-    assert.match(elements.provisionMessage.textContent, /created and added/i);
-    assert.equal(elements.provisionSubmit.disabled, false);
-    elements.courses.selectedOptions = [elements.courses.children[0]];
-    elements.courses.listeners.change();
-    elements.difficulty.value = 'Intermediate';
-    elements.difficulty.listeners.change();
+    assert.equal(elements.courseDifficultyField.hidden, false);
+    assert.equal(elements.approve.disabled, true);
+    elements.courseDifficulty.value = 'Advanced';
+    elements.courseDifficulty.listeners.change();
     assert.equal(elements.approve.disabled, false);
     await elements.approve.listeners.click();
-    assert.deepEqual(approvalPayload, { reviewNotes: null, courseIds: [COURSE_ID], difficultyLevel: 'Intermediate' });
-    assert.ok(paths.includes('/admin/submissions/database-concepts'), 'successful concept approval refreshes approved resource concepts');
-    assert.equal(elements.resourceConcept.children[1].value, '76');
+    assert.ok(paths.includes('/admin/submissions/17/approve'));
+    assert.deepEqual(approvalPayload, { reviewNotes: null, difficultyLevel: 'Advanced' });
     assert.ok(controller);
 });
 
@@ -594,6 +608,33 @@ test('resource approval stays unavailable when the approved Database Concepts li
     assert.equal(elements.resourceConcept.disabled, true);
     assert.equal(elements.approve.disabled, true);
     assert.match(elements.resourceConceptMessage.textContent, /Approve a concept first/i);
+});
+
+test('resource approval preserves the student-selected course and concept association', async () => {
+    const elements = createElements();
+    const payloads = [];
+    const { controller } = createController({ elements, api: {
+        async get(path) {
+            if (path === '/admin/submissions/26') return { submission: submission({
+                submissionId: 26, submissionType: 'RESOURCE',
+                submissionData: { title: 'Joins notes', type: 'document', courseId: 'COURSE-1', conceptId: 11, document: { originalName: 'joins.pdf' } }
+            }) };
+            if (path === '/admin/submissions/database-concepts') return { concepts: [{ concept_id: 1, name: 'Other Database concept' }] };
+            if (path === '/admin/submissions/courses/COURSE-1/concepts') return { concepts: [
+                { concept_id: 11, name: 'Joins' }, { concept_id: 12, name: 'Indexes' }
+            ] };
+            return queueResult([], 1, 0, 0);
+        },
+        async patch(path, payload) { payloads.push({ path, payload }); return { success: true }; }
+    } });
+    await controller.openDetail(26);
+    assert.deepEqual(elements.resourceConcept.children.slice(1).map(option => option.value), ['11']);
+    assert.match(elements.resourceConceptMessage.textContent, /cannot be changed during review/i);
+    elements.resourceConcept.value = '11';
+    elements.resourceConcept.listeners.change();
+    assert.equal(elements.approve.disabled, false);
+    await elements.approve.listeners.click();
+    assert.deepEqual(payloads[0].payload, { reviewNotes: null, conceptId: '11' });
 });
 
 test('opening a resource refreshes a previously empty approved concept cache', async () => {

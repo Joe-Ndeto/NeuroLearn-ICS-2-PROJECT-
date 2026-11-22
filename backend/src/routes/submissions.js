@@ -3,10 +3,14 @@
 const express = require('express');
 const authenticateToken = require('../middleware/authenticateToken');
 const path = require('path');
+const crypto = require('crypto');
+const fsPromises = require('fs/promises');
 const { upload: uploadResourceDocument, uploadFolder, validateDocument, removeUploadedFile, maxFileSize } = require('../middleware/resourceDocumentUpload');
-const { createPendingSubmission, getLearnerSubmissions } = require('../services/knowledgeSubmissionService');
+const { createPendingSubmission, createPendingCourseSubmission, createPendingResourceSubmission, getLearnerSubmissions, getApprovedCourseConceptOptions, validateResourceCourseConcept } = require('../services/knowledgeSubmissionService');
+const { processDocument, removeProcessedText } = require('../services/documentProcessingService');
 
 const router = express.Router();
+const projectRoot = path.resolve(__dirname, '../../..');
 const CONTROL_FIELDS = [
     'status',
     'submittedBy',
@@ -146,6 +150,26 @@ router.post('/concepts', async (req, res) => {
     });
 });
 
+router.post('/courses', async (req, res) => {
+    if (!requireStudent(req, res) || !validateBody(req, res)) return;
+    const title = requiredText(req.body, 'title', 200, res);
+    if (title === null) return;
+    const description = optionalText(req.body, 'description', 5000, res);
+    if (description === null) return;
+    try {
+        const submission = await createPendingCourseSubmission({
+            title,
+            description,
+            learnerId: req.user.learner_id
+        });
+        return res.status(201).json({ success: true, submission });
+    } catch (error) {
+        if (error.name === 'ApprovalError') return res.status(error.status).json({ success: false, code: error.code, message: error.message });
+        console.error('[Submissions] Could not create course submission:', error.code || 'course_submission_failed');
+        return res.status(500).json({ success: false, message: 'Could not save the course proposal.' });
+    }
+});
+
 router.post('/prerequisites', async (req, res) => {
     if (!requireStudent(req, res) || !validateBody(req, res)) {
         return;
@@ -156,6 +180,17 @@ router.post('/prerequisites', async (req, res) => {
         message: 'Prerequisite relationships are managed by administrators.'
     });
 
+});
+
+router.get('/resource-options', async (req, res) => {
+    if (!requireStudent(req, res)) return;
+    try {
+        const courses = await getApprovedCourseConceptOptions();
+        return res.json({ success: true, courses });
+    } catch (error) {
+        console.error('[Submissions] Could not load approved resource options:', error.code || 'resource_options_unavailable');
+        return res.status(503).json({ success: false, message: 'Approved courses and concepts could not be loaded.' });
+    }
 });
 
 router.post('/resources', (req, res, next) => {
@@ -178,10 +213,25 @@ router.post('/resources', (req, res, next) => {
         await removeUploadedFile(req.file).catch(() => {});
         return;
     }
-    if (Object.prototype.hasOwnProperty.call(req.body, 'conceptId')) {
-        return fail(400, 'The resource concept is assigned by an administrator during review.');
-    }
     if (!req.file) return res.status(400).json({ success: false, message: 'Please select a PDF, PowerPoint or Word document.' });
+    const courseId = typeof req.body.courseId === 'string' ? req.body.courseId.trim() : '';
+    const conceptId = typeof req.body.conceptId === 'string' ? req.body.conceptId.trim() : '';
+    if (!courseId || !conceptId) return fail(400, 'Select an approved course and concept for this document.');
+    let validAssociation;
+    try {
+        validAssociation = await validateResourceCourseConcept(courseId, conceptId);
+    } catch (error) {
+        console.error('[Submissions] Resource course-concept validation failed:', error.code || 'association_lookup_failed');
+        return fail(503, 'The selected course and concept could not be validated. Please retry.');
+    }
+    if (!validAssociation) {
+        return fail(422, 'The selected concept is not associated with the selected approved course.');
+    }
+    const idempotencyKey = req.get('Idempotency-Key');
+    if (typeof idempotencyKey !== 'string' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(idempotencyKey)) {
+        return fail(400, 'A valid submission retry key is required. Refresh the form and try again.');
+    }
     try {
         await validateDocument(req.file);
     } catch (error) {
@@ -194,23 +244,68 @@ router.post('/resources', (req, res, next) => {
     const extension = path.extname(req.file.originalname).toLowerCase();
     const documentType = ['.ppt', '.pptx'].includes(extension) ? 'PowerPoint' : ['.doc', '.docx'].includes(extension) ? 'Word' : 'PDF';
 
+    let processingStatus = 'failed';
+    if (['.pdf', '.docx', '.pptx'].includes(extension)) {
+        try {
+            await processDocument(req.file.path);
+            processingStatus = 'processed';
+        } catch (error) {
+            // Preserve the review submission, but never present failed extraction as study-ready.
+            console.error('[Submissions] Resource document processing failed:', error.message);
+            await removeProcessedText(req.file.path).catch(() => {});
+        }
+    }
+
     try {
         const storedName = path.basename(req.file.filename);
-        const submission = await createPendingSubmission('RESOURCE', {
+        const fileDigest = crypto.createHash('sha256').update(await fsPromises.readFile(req.file.path)).digest('hex');
+        const fingerprint = crypto.createHash('sha256')
+            .update(JSON.stringify([title, courseId, conceptId, extension, fileDigest]))
+            .digest('hex');
+        const outcome = await createPendingResourceSubmission({
+            learnerId: req.user.learner_id,
             title,
-            type: 'document',
+            courseId,
+            conceptId,
+            idempotencyKey,
+            fingerprint,
             document: {
                 filename: storedName,
                 originalName: path.basename(req.file.originalname).slice(0, 255),
                 extension,
                 documentType,
-                size: req.file.size
+                size: req.file.size,
+                filePath: path.relative(projectRoot, req.file.path),
+                processingStatus
             }
-        }, req.user.learner_id);
-        return res.status(201).json({ success: true, submission });
+        });
+        if (outcome.replayed) {
+            await removeProcessedText(req.file.path).catch(() => {});
+            await removeUploadedFile(req.file).catch(error => console.error('[Submissions] Retry upload cleanup failed:', error.message));
+        }
+        const processingFailed = outcome.processingStatus !== 'processed';
+        const message = processingFailed
+            ? 'Your resource was submitted for review, but its document could not be processed and will not be available in the Study Workspace.'
+            : 'Your learning resource was submitted for administrator review.';
+        return res.status(outcome.replayed ? 200 : 201).json({
+            success: true,
+            submission: outcome.submission,
+            replayed: outcome.replayed,
+            processingStatus: outcome.processingStatus,
+            message
+        });
     } catch (error) {
-        console.error('[Submissions] Could not validate resource concept:', error.message);
-        return fail(500, 'Could not save the resource submission.');
+        if (error.outcomeUncertain) {
+            console.error('[Submissions] Resource submission outcome could not be confirmed.');
+            return res.status(503).json({ success: false, code: error.code, message: error.message });
+        }
+        console.error('[Submissions] Could not save resource submission:', error.message);
+        await removeProcessedText(req.file.path).catch(() => {});
+        return fail(error.status || 500, error.status && error.status < 500
+            ? error.message
+            : error.code === 'RESOURCE_SUBMISSION_BUSY'
+                ? error.message
+                : 'Could not save the resource submission.');
     }
 });
 
@@ -219,12 +314,26 @@ router.get('/resources/:submissionId/document', async (req, res) => {
     if (!Number.isSafeInteger(submissionId) || submissionId < 1) return res.status(400).json({ success: false, message: 'Invalid submission ID.' });
     try {
         const [rows] = await require('../config/mysql').execute(
-            `SELECT submitted_by, submission_data FROM knowledge_submissions
-             WHERE submission_id = ? AND submission_type = 'RESOURCE'`, [submissionId]
+            `SELECT s.submitted_by, s.submission_data, s.status,
+                    ud.processing_status,
+                    EXISTS (
+                        SELECT 1
+                        FROM learning_resource AS lr
+                        INNER JOIN concept_course AS association ON association.concept_id = lr.concept_id
+                        INNER JOIN course AS approved_course ON approved_course.graph_course_id = association.course_graph_id
+                        WHERE lr.file_url = CONCAT('/api/submissions/resources/', s.submission_id, '/document')
+                    ) AS shared_resource
+             FROM knowledge_submissions AS s
+             LEFT JOIN uploaded_document AS ud
+               ON JSON_UNQUOTE(JSON_EXTRACT(s.submission_data, '$.document.documentId')) = CAST(ud.document_id AS CHAR)
+             WHERE s.submission_id = ? AND s.submission_type = 'RESOURCE'`, [submissionId]
         );
         if (!rows.length) return res.status(404).json({ success: false, message: 'Document not found.' });
-        if (req.user.role !== 'admin' && Number(rows[0].submitted_by) !== Number(req.user.learner_id)) return res.status(403).json({ success: false, message: 'You are not allowed to access this document.' });
-        const data = typeof rows[0].submission_data === 'string' ? JSON.parse(rows[0].submission_data) : rows[0].submission_data;
+        const row = rows[0];
+        const isOwner = Number(row.submitted_by) === Number(req.user.learner_id);
+        const isApprovedShared = row.status === 'approved' && row.processing_status === 'processed' && Number(row.shared_resource) === 1;
+        if (req.user.role !== 'admin' && !isOwner && !isApprovedShared) return res.status(403).json({ success: false, message: 'You are not allowed to access this document.' });
+        const data = typeof row.submission_data === 'string' ? JSON.parse(row.submission_data) : row.submission_data;
         const filename = data?.document?.filename;
         if (typeof filename !== 'string' || !/^[0-9a-f-]{36}\.(pdf|ppt|pptx|doc|docx)$/i.test(filename)) return res.status(404).json({ success: false, message: 'Document not found.' });
         const fullPath = path.join(uploadFolder, filename);

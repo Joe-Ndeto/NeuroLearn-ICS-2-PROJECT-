@@ -14,10 +14,11 @@ class CourseValidationError extends Error {
 }
 
 class PrerequisiteGraphError extends Error {
-    constructor(code, message) {
+    constructor(code, message, cause = null) {
         super(message);
         this.name = 'PrerequisiteGraphError';
         this.code = code;
+        if (cause) this.cause = cause;
     }
 }
 
@@ -331,15 +332,71 @@ async function getPrerequisiteClosure(candidateGraphIds, {
     } catch (error) {
         operationError = error;
         if (error instanceof PrerequisiteGraphError) throw error;
-        throw new PrerequisiteGraphError('GRAPH_UNAVAILABLE', 'Prerequisite graph data is unavailable.');
+        throw new PrerequisiteGraphError('GRAPH_UNAVAILABLE', 'Prerequisite graph data is unavailable.', error);
     } finally {
         if (session) {
             try {
                 await session.close();
-            } catch {
+            } catch (error) {
                 if (!operationError) {
-                    throw new PrerequisiteGraphError('GRAPH_UNAVAILABLE', 'Prerequisite graph data is unavailable.');
+                    throw new PrerequisiteGraphError('GRAPH_UNAVAILABLE', 'Prerequisite graph data is unavailable.', error);
                 }
+            }
+        }
+    }
+}
+
+async function getCoursePrerequisiteClosure(candidateCourseIds, { getSessionFactory = getSession } = {}) {
+    if (!Array.isArray(candidateCourseIds) || candidateCourseIds.some(id =>
+        typeof id !== 'string' || !COURSE_ID_PATTERN.test(id)) ||
+        new Set(candidateCourseIds).size !== candidateCourseIds.length) {
+        throw new PrerequisiteGraphError('INVALID_COURSE_IDS', 'Unique valid course IDs are required.');
+    }
+    let session;
+    let operationError = null;
+    try {
+        session = getSessionFactory();
+        const result = await session.run(`
+            UNWIND $courseIds AS courseId
+            OPTIONAL MATCH (candidate:Course {course_id: courseId})
+            OPTIONAL MATCH (prerequisite:Course)-[:PREREQUISITE_OF*1..]->(candidate)
+            RETURN courseId, candidate.course_id AS matchedCourseId,
+                   collect(DISTINCT CASE WHEN prerequisite IS NULL THEN null
+                       ELSE { courseId: prerequisite.course_id }
+                   END) AS prerequisiteNodes
+        `, { courseIds: candidateCourseIds });
+        if (!Array.isArray(result.records) || result.records.length !== candidateCourseIds.length) {
+            throw new PrerequisiteGraphError('MISSING_COURSE_NODE', 'A course is missing from the knowledge graph.');
+        }
+        const closures = new Map();
+        for (const record of result.records) {
+            const candidateId = record.get('courseId');
+            if (record.get('matchedCourseId') !== candidateId || closures.has(candidateId)) {
+                throw new PrerequisiteGraphError('MISSING_COURSE_NODE', 'A course is missing or ambiguous in the knowledge graph.');
+            }
+            const nodes = record.get('prerequisiteNodes');
+            if (!Array.isArray(nodes)) throw new PrerequisiteGraphError('INVALID_COURSE_PREREQUISITE', 'Course prerequisite closure is invalid.');
+            const ids = nodes.map(node => {
+                const id = node?.courseId;
+                if (typeof id !== 'string' || !COURSE_ID_PATTERN.test(id)) {
+                    throw new PrerequisiteGraphError('INVALID_COURSE_PREREQUISITE_NODE', 'A prerequisite course has a missing or invalid ID.');
+                }
+                if (id === candidateId) throw new PrerequisiteGraphError('COURSE_PREREQUISITE_CYCLE', 'Course prerequisite data contains a self-ancestor.');
+                return id;
+            });
+            if (new Set(ids).size !== ids.length) throw new PrerequisiteGraphError('INVALID_COURSE_PREREQUISITE', 'Course prerequisite closure contains duplicates.');
+            closures.set(candidateId, ids.sort());
+        }
+        return closures;
+    } catch (error) {
+        operationError = error;
+        if (error instanceof PrerequisiteGraphError) throw error;
+        throw new PrerequisiteGraphError('COURSE_PREREQUISITE_LOOKUP_FAILED', 'Course prerequisite graph lookup failed.', error);
+    } finally {
+        if (session) {
+            try { await session.close(); }
+            catch (error) {
+                if (!operationError) throw new PrerequisiteGraphError('GRAPH_UNAVAILABLE', 'Course prerequisite graph data is unavailable.', error);
             }
         }
     }
@@ -462,6 +519,7 @@ module.exports = {
     validateCourseIds,
     getAllConcepts,
     getPrerequisiteClosure,
+    getCoursePrerequisiteClosure,
     createCourse,
     createConcept,
     addPrerequisite,

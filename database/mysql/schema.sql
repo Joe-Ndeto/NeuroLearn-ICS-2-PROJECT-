@@ -45,7 +45,7 @@ CREATE TABLE concept_prerequisite (
 
 CREATE TABLE knowledge_submissions (
     submission_id INT NOT NULL AUTO_INCREMENT,
-    submission_type ENUM('CONCEPT', 'PREREQUISITE', 'RESOURCE') NOT NULL,
+    submission_type ENUM('CONCEPT', 'PREREQUISITE', 'RESOURCE', 'COURSE', 'COURSE_PREREQUISITE') NOT NULL,
     submission_data JSON NOT NULL,
     status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
     submitted_by INT NOT NULL,
@@ -63,10 +63,45 @@ CREATE TABLE knowledge_submissions (
         REFERENCES learner (learner_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+-- Approved course catalogue. graph_course_id preserves the Neo4j identifier
+-- consumed by concept_course while MySQL remains canonical.
+CREATE TABLE course (
+    course_id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    graph_course_id VARCHAR(100) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    normalized_title VARCHAR(200) NOT NULL,
+    description TEXT,
+    difficulty_level ENUM('Beginner', 'Intermediate', 'Advanced') NOT NULL,
+    created_by INT NOT NULL,
+    approved_by INT NOT NULL,
+    approved_submission_id INT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_course_graph_id (graph_course_id),
+    UNIQUE KEY uq_course_normalized_title (normalized_title),
+    UNIQUE KEY uq_course_approved_submission (approved_submission_id),
+    CONSTRAINT fk_course_creator FOREIGN KEY (created_by) REFERENCES learner (learner_id),
+    CONSTRAINT fk_course_approver FOREIGN KEY (approved_by) REFERENCES learner (learner_id),
+    CONSTRAINT fk_course_submission FOREIGN KEY (approved_submission_id) REFERENCES knowledge_submissions (submission_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE course_prerequisite (
+    course_prerequisite_id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    prerequisite_course_id INT NOT NULL,
+    target_course_id INT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_course_prerequisite_pair (prerequisite_course_id, target_course_id),
+    KEY idx_course_prerequisite_target (target_course_id),
+    CONSTRAINT fk_course_prerequisite_source FOREIGN KEY (prerequisite_course_id) REFERENCES course (course_id),
+    CONSTRAINT fk_course_prerequisite_target FOREIGN KEY (target_course_id) REFERENCES course (course_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE knowledge_sync_outbox (
     outbox_id BIGINT NOT NULL AUTO_INCREMENT,
     submission_id INT NOT NULL,
-    canonical_record_type ENUM('CONCEPT', 'PREREQUISITE', 'RESOURCE') NOT NULL,
+    canonical_record_type ENUM('CONCEPT', 'PREREQUISITE', 'RESOURCE', 'COURSE', 'COURSE_PREREQUISITE') NOT NULL,
     canonical_record_id INT NOT NULL,
     sync_status ENUM('pending', 'processing', 'completed', 'failed')
         NOT NULL DEFAULT 'pending',

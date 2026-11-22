@@ -9,7 +9,9 @@ const {
     cleanupWorkerRuntime,
     getWorkerHealthSnapshot,
     listenWorkerHealthServer,
-    readWorkerConfig
+    readWorkerConfig,
+    verifyWorkerDependencies,
+    formatWorkerError
 } = require('../src/workers/knowledgeSyncWorker');
 
 const quietLogger = { info() {}, error() {} };
@@ -29,6 +31,110 @@ test('reads safe worker defaults and validates lease versus transaction timeout'
         KNOWLEDGE_SYNC_HEALTH_HOST: '0.0.0.0',
         KNOWLEDGE_SYNC_HEALTH_ALLOW_EXTERNAL: 'true'
     }).healthHost, '0.0.0.0');
+});
+
+test('verifies MySQL and Neo4j before reporting either connection healthy', async () => {
+    const events = [];
+    const logger = {
+        info(message) { events.push(message); },
+        error(message) { events.push(message); }
+    };
+    const connection = {
+        async ping() { events.push('mysql ping succeeded'); },
+        release() { events.push('mysql connection released'); }
+    };
+    await verifyWorkerDependencies({
+        mysql: { async getConnection() { events.push('mysql connection acquired'); return connection; } },
+        neo4j: { async verifyNeo4jConnection() { events.push('neo4j verification succeeded'); } },
+        logger
+    });
+
+    assert.ok(events.indexOf('[knowledge-sync] MySQL connectivity verified') > events.indexOf('mysql ping succeeded'));
+    assert.ok(events.indexOf('[knowledge-sync] Neo4j connectivity verified') > events.indexOf('neo4j verification succeeded'));
+    assert.ok(events.indexOf('[knowledge-sync] MySQL connectivity verified') < events.indexOf('[knowledge-sync] verifying Neo4j connectivity'));
+});
+
+test('startup verification failure does not report the failed dependency as healthy', async t => {
+    await t.test('MySQL ping failure prevents Neo4j verification and discards the connection', async () => {
+        const events = [];
+        const connection = {
+            async ping() { throw Object.assign(new Error('MySQL unavailable'), { code: 'ECONNREFUSED' }); },
+            release() { events.push('released'); },
+            destroy() { events.push('destroyed'); }
+        };
+        await assert.rejects(verifyWorkerDependencies({
+            mysql: { async getConnection() { return connection; } },
+            neo4j: { async verifyNeo4jConnection() { events.push('neo4j checked'); } },
+            logger: { info(message) { events.push(message); }, error() {} }
+        }), /MySQL unavailable/);
+        assert.ok(events.includes('destroyed'));
+        assert.ok(!events.includes('released'));
+        assert.ok(!events.includes('neo4j checked'));
+        assert.ok(!events.includes('[knowledge-sync] MySQL connectivity verified'));
+    });
+
+    await t.test('Neo4j failure is propagated after confirmed MySQL connectivity', async () => {
+        const events = [];
+        await assert.rejects(verifyWorkerDependencies({
+            mysql: { async getConnection() { return { async ping() {}, release() { events.push('released'); } }; } },
+            neo4j: { async verifyNeo4jConnection() { throw Object.assign(new Error('Neo4j unavailable'), { code: 'ServiceUnavailable' }); } },
+            logger: { info(message) { events.push(message); }, error() {} }
+        }), /Neo4j unavailable/);
+        assert.ok(events.includes('[knowledge-sync] MySQL connectivity verified'));
+        assert.ok(!events.includes('[knowledge-sync] Neo4j connectivity verified'));
+    });
+});
+
+test('worker logs ready, idle waiting, successful processing, retry, and shutdown without fake activity', async () => {
+    const messages = [];
+    const logger = {
+        info(message) { messages.push(message); },
+        warn(message) { messages.push(message); },
+        error(message) { messages.push(message); }
+    };
+    let claims = 0;
+    let taskNumber = 0;
+    const worker = createKnowledgeSyncWorker({
+        service: {
+            async claimTasks() {
+                claims++;
+                if (claims === 1) return [];
+                if (claims === 2) return [{ outbox_id: 5, canonical_record_type: 'CONCEPT', attempt_count: 1 }];
+                if (claims === 3) return [{ outbox_id: 6, canonical_record_type: 'RESOURCE', attempt_count: 2 }];
+                return [];
+            },
+            async processTask() {
+                taskNumber++;
+                return { outcome: taskNumber === 1 ? 'retry' : 'completed' };
+            }
+        },
+        config: { batchSize: 1, concurrency: 1, pollIntervalMs: 2 },
+        logger
+    });
+
+    worker.start();
+    try {
+        for (let attempt = 0; attempt < 100 && !messages.some(message => message.includes('task=6 type=RESOURCE outcome=completed')); attempt += 1) {
+            await new Promise(resolve => setTimeout(resolve, 2));
+        }
+        assert.ok(messages.some(message => message.includes('worker initialized and ready')));
+        assert.ok(messages.some(message => message.includes('waiting for pending synchronization tasks')));
+        assert.ok(messages.some(message => message.includes('task=5 type=CONCEPT retry scheduled')));
+        assert.ok(messages.some(message => message.includes('task=6 type=RESOURCE outcome=completed')));
+        assert.equal(worker.getHealthSnapshot().lastSuccessfulSyncAt !== null, true);
+    } finally {
+        await worker.stop();
+    }
+    assert.ok(messages.some(message => message.includes('shutdown complete')));
+});
+
+test('worker diagnostics redact connection strings, credentials, and tokens', () => {
+    const diagnostic = formatWorkerError(Object.assign(
+        new Error('connect bolt://worker-user:worker-pass@graph.internal:7687 password=secret Bearer token.value'),
+        { code: 'ServiceUnavailable' }
+    ));
+    assert.match(diagnostic, /ServiceUnavailable/);
+    assert.doesNotMatch(diagnostic, /worker-user|worker-pass|graph\.internal|secret|token\.value/);
 });
 
 test('prevents a second polling loop and waits for active work during graceful shutdown', async () => {

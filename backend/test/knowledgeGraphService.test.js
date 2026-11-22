@@ -16,7 +16,7 @@ Module._load = function (request, parent, isMain) {
     return originalLoad.call(this, request, parent, isMain);
 };
 
-const { validateCourseIds, provisionCourse, getPrerequisiteClosure } = require('../src/services/knowledgeGraphService');
+const { validateCourseIds, provisionCourse, getPrerequisiteClosure, getCoursePrerequisiteClosure } = require('../src/services/knowledgeGraphService');
 Module._load = originalLoad;
 
 const COURSE_A = 'COURSE-11111111-1111-4111-8111-111111111111';
@@ -346,7 +346,7 @@ test('fails closed on graph query errors and closes the session', async () => {
 
     await assert.rejects(
         getPrerequisiteClosure(['CONCEPT-1'], { courseId: COURSE_A }),
-        error => error.code === 'GRAPH_UNAVAILABLE'
+        error => error.code === 'GRAPH_UNAVAILABLE' && error.cause?.message === 'graph read failed'
     );
     assert.equal(mock.calls.close, 1);
 });
@@ -368,4 +368,57 @@ test('rejects malformed candidate IDs before opening a graph session', async () 
         getPrerequisiteClosure(['CONCEPT-1', '  '], { courseId: COURSE_A }),
         error => error.code === 'INVALID_CANDIDATE_IDS'
     );
+});
+
+test('course prerequisite closure preserves incoming direction, transitive ancestors, and confirmed empty sets', async t => {
+    const courseB = COURSE_B;
+    const courseC = 'COURSE-33333333-3333-4333-8333-333333333333';
+    async function runWith(records) {
+        let closed = false;
+        mockGetSession = () => ({
+            async run(query, parameters) {
+                assert.match(query, /\(prerequisite:Course\)-\[:PREREQUISITE_OF\*1\.\.\]->\(candidate\)/);
+                assert.deepEqual(parameters.courseIds, [COURSE_A, courseB]);
+                return { records };
+            },
+            async close() { closed = true; }
+        });
+        const result = await getCoursePrerequisiteClosure([COURSE_A, courseB]);
+        assert.equal(closed, true);
+        return result;
+    }
+    await t.test('all transitive ancestors are returned for prerequisite -> target', async () => {
+        const result = await runWith([
+            { get: key => ({ courseId: COURSE_A, matchedCourseId: COURSE_A, prerequisiteNodes: [{ courseId: courseB }, { courseId: courseC }] })[key] },
+            { get: key => ({ courseId: courseB, matchedCourseId: courseB, prerequisiteNodes: [] })[key] }
+        ]);
+        assert.deepEqual(result.get(COURSE_A), [courseB, courseC]);
+        assert.deepEqual(result.get(courseB), []);
+    });
+    await t.test('a confirmed candidate without edges returns an empty closure', async () => {
+        const result = await runWith([
+            { get: key => ({ courseId: COURSE_A, matchedCourseId: COURSE_A, prerequisiteNodes: [] })[key] },
+            { get: key => ({ courseId: courseB, matchedCourseId: courseB, prerequisiteNodes: [] })[key] }
+        ]);
+        assert.deepEqual(result.get(COURSE_A), []);
+    });
+});
+
+test('course prerequisite closure rejects missing graph nodes and malformed prerequisite node IDs', async t => {
+    for (const [label, matched, node, code] of [
+        ['missing candidate', null, [], 'MISSING_COURSE_NODE'],
+        ['malformed ancestor', COURSE_A, [{ courseId: null }], 'INVALID_COURSE_PREREQUISITE_NODE']
+    ]) {
+        await t.test(label, async () => {
+            let closed = false;
+            mockGetSession = () => ({
+                async run() { return { records: [
+                    { get: key => ({ courseId: COURSE_A, matchedCourseId: matched, prerequisiteNodes: node })[key] }
+                ] }; },
+                async close() { closed = true; }
+            });
+            await assert.rejects(getCoursePrerequisiteClosure([COURSE_A]), error => error.code === code);
+            assert.equal(closed, true);
+        });
+    }
 });

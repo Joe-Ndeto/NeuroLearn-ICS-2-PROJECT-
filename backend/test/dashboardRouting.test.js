@@ -128,6 +128,7 @@ test('student and admin pages load only their own feature modules and markup', (
     assert.match(studentHtml, /id="recommendations-empty"/);
     assert.match(studentHtml, /id="recommendations-error"/);
     assert.match(studentHtml, /id="recommendations-list"/);
+    assert.match(studentHtml, /id="recommendations-intro"/);
     assert.match(studentHtml, /id="concept-submission-form"/);
     assert.match(studentHtml, /id="submission-history"/);
     assert.doesNotMatch(studentHtml, /id="admin-submission-review"|id="admin-sync-operations"/);
@@ -168,10 +169,18 @@ test('student and admin pages load only their own feature modules and markup', (
     assert.match(studentJs, /response\.recommendations\.map\(recommendation =>[\s\S]*?renderRecommendation/);
     assert.match(studentJs, /elements\.empty\.hidden = false/);
     assert.match(studentJs, /elements\.error\.hidden = false/);
-    assert.match(studentJs, /recommendation\.explanation/);
-    assert.match(studentJs, /recommendation\.evidenceStatus/);
-    assert.match(studentJs, /recommendation\.priorityScore/);
-    assert.match(studentJs, /readiness\.prerequisites/);
+    assert.match(studentJs, /recommendationMode/);
+    assert.match(studentJs, /Recommended topics to get started/);
+    assert.match(studentJs, /Begin with these foundational topics/);
+    assert.match(studentJs, /Not started/);
+    assert.match(studentJs, /In progress/);
+    assert.match(studentJs, /Mastered/);
+    assert.match(studentJs, /Start learning/);
+    const recommendationRenderer = studentJs.slice(
+        studentJs.indexOf('function renderRecommendation'),
+        studentJs.indexOf('let recommendationRequestPending')
+    );
+    assert.doesNotMatch(recommendationRenderer, /recommendation\.priorityScore|recommendation\.evidenceStatus|recommendation\.explanation|\bUNKNOWN\b|\bPROVISIONAL\b/);
     assert.match(studentJs, /element\.textContent = value/);
     assert.doesNotMatch(studentJs, /innerHTML\s*=/);
     const studentInitialization = studentJs.slice(studentJs.indexOf('async function initializeDashboard'));
@@ -179,6 +188,41 @@ test('student and admin pages load only their own feature modules and markup', (
         studentInitialization.indexOf('await loadStudentContributionModule()'),
     'recommendations should load even if the separate contribution module fails');
     assert.match(adminJs, /async function initializeAdminDashboard\(\)[\s\S]*?roleRouting\.validateAndRoute[\s\S]*?loadAdminModules\(\)/);
+});
+
+test('quiz course selection is required and submitted explicitly; learner progress route is mounted', () => {
+    const studyHtml = readFrontend('study.html');
+    const studyJs = readFrontend('study.js');
+    const backendRoot = path.join(__dirname, '../src');
+    const appSource = fs.readFileSync(path.join(backendRoot, 'app.js'), 'utf8');
+    const progressRoute = fs.readFileSync(path.join(backendRoot, 'routes/learnerProgress.js'), 'utf8');
+    assert.match(studyHtml, /id="quiz-course" required/);
+    assert.match(studyHtml, /Choose the course that matches your learning material/);
+    assert.match(studyJs, /api\.get\('\/submissions\/resource-options'\)/);
+    assert.match(studyJs, /conceptId: Number\(selected\.concept_id\)/);
+    assert.match(studyJs, /courseId,\s*conceptId:\s*Number\(selected\.concept_id\)/);
+    assert.match(appSource, /app\.use\('\/api\/learners',\s*learnerProgressRoute\)/);
+    assert.match(progressRoute, /router\.get\('\/me\/progress',\s*authenticateToken,\s*requireStudent/);
+});
+
+test('Study Workspace uses one course selection for the hierarchical shared library and existing AI tools', () => {
+    const studyHtml = readFrontend('study.html');
+    const studyJs = readFrontend('study.js');
+    const uploadRoute = fs.readFileSync(path.join(__dirname, '../src/routes/upload.js'), 'utf8');
+    assert.match(studyHtml, /id="library-course"/);
+    assert.doesNotMatch(studyHtml, /id="document-file"|id="upload-document"|Upload Selected File/);
+    assert.doesNotMatch(studyJs, /api\.post\('\/upload'/);
+    assert.match(studyJs, /api\.get\(`\/upload\/library\$\{query\}`\)/);
+    assert.match(studyJs, /library-course-group/);
+    assert.match(studyJs, /library-concept-group/);
+    assert.match(studyJs, /Uncategorised — my personal uploads/);
+    assert.match(studyJs, /My resource submissions/);
+    assert.match(studyJs, /function synchronizeCourseSelection/);
+    assert.match(studyJs, /documentId: Number\(selectedDocumentId\),\s*courseId:/);
+    assert.match(studyJs, /conceptId: selected\.scope === 'shared' \? Number\(selected\.concept_id\) : null/);
+    assert.match(uploadRoute, /s\.status = 'approved'/);
+    assert.match(uploadRoute, /ud\.processing_status = 'processed'/);
+    assert.match(uploadRoute, /req\.user\.learner_id/);
 });
 
 test('statistics route is registered at the same prefix and subpath used by the client', () => {

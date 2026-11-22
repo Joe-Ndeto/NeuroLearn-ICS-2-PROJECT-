@@ -9,7 +9,7 @@ function harness(overrides = {}) {
         status: 'processing', token: 'claim', attempt: 0, lastError: null, completed: 0,
         claimRows: overrides.claimRows || [],
         concept: { concept_id: 7, concept_name: 'Algebra', description: 'Description', difficulty_level: 'Intermediate', graph_concept_id: Object.hasOwn(overrides, 'conceptGraphId') ? overrides.conceptGraphId : 'CONCEPT-abc' },
-        courses: [{ course_graph_id: 'COURSE-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
+        courses: overrides.conceptCourses || [{ course_graph_id: 'COURSE-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
         prerequisite: {
             prerequisite_id: 12, prerequisite_concept_id: 1, target_concept_id: 2,
             prerequisite_name: 'Before', prerequisite_description: null,
@@ -22,6 +22,13 @@ function harness(overrides = {}) {
             file_url: 'https://example.test/notes', graph_resource_id: 'RESOURCE-a',
             concept_name: 'Algebra', description: 'Description', difficulty_level: null,
             concept_graph_id: 'CONCEPT-abc'
+        },
+        course: { course_id: 15, graph_course_id: 'COURSE-cccccccc-cccc-4ccc-8ccc-cccccccccccc', title: 'Data Systems', description: 'Course', difficulty_level: 'Intermediate' },
+        coursePrerequisite: {
+            course_prerequisite_id: 16, prerequisite_course_id: 1, target_course_id: 2,
+            is_active: overrides.inactiveCoursePrerequisite ? 0 : 1,
+            prerequisite_graph_id: 'COURSE-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            target_graph_id: 'COURSE-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
         },
         failCourse: Boolean(overrides.failCourse), failCompletionOnce: false, terminalFailures: 0, completionUpdates: 0,
         txCommits: 0, txRollbacks: 0, sessionCloses: 0, cypher: [],
@@ -100,6 +107,8 @@ function harness(overrides = {}) {
                     : [], []];
             }
             if (query.startsWith('SELECT r.resource_id')) return [overrides.missingCanonical ? [] : [state.resource], []];
+            if (query.startsWith('SELECT course_id, graph_course_id')) return [overrides.missingCanonical ? [] : [state.course], []];
+            if (query.startsWith('SELECT cp.course_prerequisite_id')) return [overrides.missingCanonical ? [] : [state.coursePrerequisite], []];
             if (query.startsWith('UPDATE knowledge_sync_outbox')) {
                 if (query.includes('SET lease_expires_at = DATE_ADD')) {
                     state.renewalAttempts = (state.renewalAttempts || 0) + 1;
@@ -138,6 +147,7 @@ function harness(overrides = {}) {
                             if (state.failCourse && query.includes('MATCH (course:Course')) return { records: [] };
                             if (query.includes('MATCH (prerequisite:Concept') && overrides.missingConcept) return { records: [] };
                             if (query.includes('MATCH (concept:Concept') && query.includes('LearningResource') && overrides.missingConcept) return { records: [] };
+                            if (query.includes('MATCH (existing:Course)')) return { records: overrides.duplicateGraphCourse ? [{ get: () => true }] : [] };
                             return { records: [{ get: () => true }] };
                         },
                         async commit() {
@@ -293,7 +303,9 @@ test('synchronizes all canonical record types with stable IDs and idempotent MER
     for (const [type, id, expectedPattern] of [
         ['CONCEPT', 7, /MERGE \(c:Concept \{concept_id: \$graphId\}\).*ON CREATE SET/],
         ['PREREQUISITE', 12, /MERGE \(prerequisite\)-\[:PREREQUISITE_OF\]->\(target\)/],
-        ['RESOURCE', 14, /MERGE \(resource:LearningResource \{resource_id: \$resourceId\}\).*ON CREATE SET/]
+        ['RESOURCE', 14, /MERGE \(resource:LearningResource \{resource_id: \$resourceId\}\).*ON CREATE SET/],
+        ['COURSE', 15, /MERGE \(c:Course \{course_id: \$courseId\}\)/],
+        ['COURSE_PREREQUISITE', 16, /MERGE \(prerequisite\)-\[:PREREQUISITE_OF\]->\(target\)/]
     ]) {
         await t.test(type, async () => {
             const { service, state } = harness();
@@ -308,6 +320,15 @@ test('synchronizes all canonical record types with stable IDs and idempotent MER
     }
 });
 
+test('course prerequisite tombstones delete the Neo4j edge idempotently', async () => {
+    const { service, state } = harness({ inactiveCoursePrerequisite: true });
+    const result = await service.processTask({ outbox_id: 9, canonical_record_type: 'COURSE_PREREQUISITE', canonical_record_id: 16, attempt_count: 1, claim_token: 'claim' });
+    assert.equal(result.outcome, 'completed');
+    const write = state.cypher.find(item => item.query.includes('DELETE relationship'));
+    assert.ok(write);
+    assert.match(write.query, /OPTIONAL MATCH \(prerequisite\)-\[relationship:PREREQUISITE_OF\]->\(target\)/);
+});
+
 test('loads canonical concept difficulty and passes it to the create-only Neo4j property update', async () => {
     const { service, state } = harness();
     await service.processTask({ outbox_id: 9, canonical_record_type: 'CONCEPT', canonical_record_id: 7, attempt_count: 1, claim_token: 'claim' });
@@ -316,6 +337,19 @@ test('loads canonical concept difficulty and passes it to the create-only Neo4j 
     assert.match(conceptWrite.query, /ON CREATE SET[\s\S]*c\.difficulty_level = \$difficultyLevel/);
     assert.equal(conceptWrite.params.difficultyLevel, 'Intermediate');
     assert.doesNotMatch(conceptWrite.query, /\n\s*SET c\.difficulty_level/);
+});
+
+test('a concept synchronization task projects every administrator-approved course association', async () => {
+    const courseIds = [
+        'COURSE-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        'COURSE-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    ];
+    const { service, state } = harness({ conceptCourses: courseIds.map(course_graph_id => ({ course_graph_id })) });
+    const result = await service.processTask({ outbox_id: 9, canonical_record_type: 'CONCEPT', canonical_record_id: 7, attempt_count: 1, claim_token: 'claim' });
+    assert.equal(result.outcome, 'completed');
+    const links = state.cypher.filter(item => item.query.includes('MERGE (course)-[:CONTAINS]->(concept)'));
+    assert.deepEqual(links.map(item => item.params.courseId), courseIds);
+    assert.ok(links.every(item => item.params.conceptId === 'CONCEPT-abc'));
 });
 
 test('fails permanently when a canonical MySQL record is missing', async () => {

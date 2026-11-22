@@ -6,6 +6,66 @@ const net = require('node:net');
 let activeWorker = null;
 let lastWorker = null;
 
+function sanitizeWorkerDiagnostic(value) {
+    return String(value ?? 'unknown')
+        .replace(/(?:bolt(?:\+s)?|neo4j(?:\+s)?|mysql|https?):\/\/[^\s'"<>]+/gi, '[redacted connection string]')
+        .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+        .replace(/\b(?:MYSQL|NEO4J|JWT|GEMINI)_[A-Z0-9_]+\s*[:=]\s*[^\s,;]+/gi, '[redacted environment setting]')
+        .replace(/\b(password|passwd|pwd|secret|token|api[_-]?key|authorization)\b\s*[:=]\s*(['"]?)[^\s,;'" ]+/gi, '$1=[redacted]')
+        .replace(/for user\s+['"][^'"]+['"]/gi, 'for user [redacted]')
+        .replace(/[\r\n\t]+/g, ' ')
+        .slice(0, 500);
+}
+
+function formatWorkerError(error) {
+    const name = sanitizeWorkerDiagnostic(error?.name || 'Error');
+    const code = error?.code === undefined ? null : sanitizeWorkerDiagnostic(error.code);
+    const message = sanitizeWorkerDiagnostic(error?.message || 'unknown failure');
+    return `error=${name}${code ? ` code=${code}` : ''} message=${message}`;
+}
+
+function log(logger, level, message) {
+    const method = typeof logger[level] === 'function' ? logger[level] : logger.info;
+    if (typeof method === 'function') method.call(logger, message);
+}
+
+async function verifyWorkerDependencies({ mysql, neo4j, logger = console }) {
+    if (!mysql || typeof mysql.getConnection !== 'function') {
+        throw new TypeError('A MySQL pool is required for worker startup.');
+    }
+    if (!neo4j || typeof neo4j.verifyNeo4jConnection !== 'function') {
+        throw new TypeError('Neo4j connectivity verification is required for worker startup.');
+    }
+
+    log(logger, 'info', '[knowledge-sync] verifying MySQL connectivity');
+    const connection = await mysql.getConnection();
+    let mysqlVerified = false;
+    let verificationError = null;
+    try {
+        if (typeof connection.ping !== 'function') {
+            throw new TypeError('The MySQL connection does not support ping.');
+        }
+        await connection.ping();
+        mysqlVerified = true;
+    } catch (error) {
+        verificationError = error;
+        throw error;
+    } finally {
+        try {
+            if (mysqlVerified) connection.release();
+            else if (typeof connection.destroy === 'function') connection.destroy();
+            else connection.release();
+        } catch (cleanupError) {
+            if (!verificationError) throw cleanupError;
+        }
+    }
+    log(logger, 'info', '[knowledge-sync] MySQL connectivity verified');
+
+    log(logger, 'info', '[knowledge-sync] verifying Neo4j connectivity');
+    await neo4j.verifyNeo4jConnection();
+    log(logger, 'info', '[knowledge-sync] Neo4j connectivity verified');
+}
+
 function readPositiveInteger(env, name, defaultValue, minimum = 1) {
     const raw = env[name];
     if (raw === undefined || raw === '') return defaultValue;
@@ -63,6 +123,7 @@ function createKnowledgeSyncWorker({ service, config, logger = console, timers =
     let loopPromise = null;
     let sleepTimer = null;
     let wakeSleep = null;
+    let waitingForTasksLogged = false;
     const inFlight = new Set();
     const health = {
         state: 'not_started',
@@ -90,10 +151,20 @@ function createKnowledgeSyncWorker({ service, config, logger = console, timers =
             if (result && result.outcome === 'completed') {
                 health.lastSuccessfulSyncAt = new Date().toISOString();
             }
-            logger.info(`[knowledge-sync] task=${task.outbox_id} type=${task.canonical_record_type} outcome=${result.outcome}`);
+            const taskLabel = `task=${task.outbox_id} type=${task.canonical_record_type}`;
+            const outcome = result?.outcome || 'unknown';
+            if (outcome === 'retry') {
+                log(logger, 'warn', `[knowledge-sync] ${taskLabel} retry scheduled`);
+            } else if (outcome === 'failed' || outcome === 'completion_update_error') {
+                const detail = result?.error ? ` detail=${sanitizeWorkerDiagnostic(result.error)}` : '';
+                log(logger, 'error', `[knowledge-sync] ${taskLabel} outcome=${outcome}${detail}`);
+            } else if (outcome === 'stale') {
+                log(logger, 'warn', `[knowledge-sync] ${taskLabel} outcome=stale`);
+            } else {
+                log(logger, 'info', `[knowledge-sync] ${taskLabel} outcome=${sanitizeWorkerDiagnostic(outcome)}`);
+            }
         } catch (error) {
-            // Avoid logging raw error messages, which may contain deployment details.
-            logger.error(`[knowledge-sync] task=${task.outbox_id} type=${task.canonical_record_type} failed error=${error.name || 'Error'}`);
+            log(logger, 'error', `[knowledge-sync] task=${task.outbox_id} type=${task.canonical_record_type} failed ${formatWorkerError(error)}`);
         }
     }
 
@@ -116,13 +187,19 @@ function createKnowledgeSyncWorker({ service, config, logger = console, timers =
                     const tasks = await service.claimTasks(Math.min(config.batchSize, capacity));
                     health.lastSuccessfulPollAt = new Date().toISOString();
                     health.lastPollError = null;
+                    if (tasks.length === 0 && !waitingForTasksLogged) {
+                        log(logger, 'info', '[knowledge-sync] waiting for pending synchronization tasks');
+                        waitingForTasksLogged = true;
+                    } else if (tasks.length > 0) {
+                        waitingForTasksLogged = false;
+                    }
                     for (const task of tasks) {
                         const taskPromise = process(task).finally(() => inFlight.delete(taskPromise));
                         inFlight.add(taskPromise);
                     }
                 } catch (error) {
                     health.lastPollError = error.name || 'Error';
-                    logger.error(`[knowledge-sync] claim failed error=${error.name || 'Error'}`);
+                    log(logger, 'error', `[knowledge-sync] task polling failed; retrying ${formatWorkerError(error)}`);
                 }
             }
             if (running) await sleep();
@@ -139,6 +216,7 @@ function createKnowledgeSyncWorker({ service, config, logger = console, timers =
             health.stoppedAt = null;
             running = true;
             loopPromise = loop();
+            log(logger, 'info', '[knowledge-sync] worker initialized and ready');
             return this;
         },
         async stop() {
@@ -159,6 +237,7 @@ function createKnowledgeSyncWorker({ service, config, logger = console, timers =
             health.stoppedAt = new Date().toISOString();
             activeWorker = null;
             loopPromise = null;
+            log(logger, 'info', '[knowledge-sync] shutdown complete');
         },
         getHealthSnapshot,
         get inFlightCount() { return inFlight.size; }
@@ -247,12 +326,14 @@ async function main() {
     let worker;
     let healthServer;
     try {
+        console.info('[knowledge-sync] startup initiated');
         require('dotenv').config();
         const config = readWorkerConfig(process.env);
         mysql = require('../config/mysql');
         neo4j = require('../config/neo4j');
         const { createKnowledgeSyncService } = require('../services/knowledgeSyncService');
         const service = createKnowledgeSyncService({ mysql, getNeo4jSession: neo4j.getSession, config });
+        await verifyWorkerDependencies({ mysql, neo4j, logger: console });
         worker = createKnowledgeSyncWorker({ service, config });
         healthServer = createWorkerHealthServer(worker);
         await listenWorkerHealthServer(healthServer, config.healthPort, config.healthHost);
@@ -280,7 +361,7 @@ async function main() {
 
 if (require.main === module) {
     main().catch(error => {
-        console.error(`[knowledge-sync] startup failed error=${error.name || 'Error'}`);
+        console.error(`[knowledge-sync] startup failed ${formatWorkerError(error)}`);
         process.exitCode = 1;
     });
 }
@@ -291,5 +372,7 @@ module.exports = {
     cleanupWorkerRuntime,
     getWorkerHealthSnapshot,
     listenWorkerHealthServer,
-    readWorkerConfig
+    readWorkerConfig,
+    verifyWorkerDependencies,
+    formatWorkerError
 };

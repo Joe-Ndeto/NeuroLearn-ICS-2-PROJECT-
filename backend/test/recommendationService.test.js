@@ -60,6 +60,9 @@ function createMysql({
     edges: edgeOverrides = canonicalEdges,
     evidence: evidenceOverrides = evidenceRows,
     unresolvedTasks = [],
+    coursePrerequisites = [],
+    relevantCourses = [{ courseId: 1, graphCourseId: COURSE_ID, title: 'Database Concepts' }],
+    courseConcepts = candidateRows.map(row => ({ courseGraphId: COURSE_ID, conceptId: row.conceptId })),
     learnerExists = true,
     failAt = null,
     failRollback = false,
@@ -86,6 +89,14 @@ function createMysql({
             if (normalized.startsWith('SELECT c.concept_id AS conceptId')) {
                 return [[...structuredClone(candidateOverrides)]];
             }
+            if (normalized.startsWith('SELECT course_id AS courseId, graph_course_id AS graphCourseId, title FROM course WHERE graph_course_id')) {
+                return [[{ courseId: 1, graphCourseId: COURSE_ID, title: 'Database Concepts' }]];
+            }
+            if (normalized.startsWith('SELECT course_prerequisite_id AS relationshipId')) return [[...structuredClone(coursePrerequisites)]];
+            if (normalized.startsWith('SELECT course_id AS courseId, graph_course_id AS graphCourseId, title FROM course WHERE course_id IN')) {
+                return [[...structuredClone(relevantCourses)]];
+            }
+            if (normalized.startsWith('SELECT cc.course_graph_id AS courseGraphId')) return [[...structuredClone(courseConcepts)]];
             if (normalized.startsWith('SELECT concept_id AS conceptId')) {
                 return [[...structuredClone(conceptOverrides)]];
             }
@@ -130,12 +141,16 @@ function serviceHarness(options = {}) {
     const graphSnapshot = options.graphSnapshot === undefined ? baseGraphSnapshot() : options.graphSnapshot;
     const graphReader = async (candidateGraphIds, { courseId }) => {
         graphCalls.push({ candidateGraphIds: [...candidateGraphIds], courseId });
-        if (options.graphError) throw new Error('Neo4j unavailable');
+        if (options.graphError) {
+            throw options.graphError instanceof Error ? options.graphError : new Error('Neo4j unavailable');
+        }
         return typeof graphSnapshot === 'function' ? graphSnapshot(candidateGraphIds) : structuredClone(graphSnapshot);
     };
+    const courseGraphReader = options.courseGraphReader || (async ids => new Map(ids.map(id => [id, []])));
     const service = createRecommendationService({
         mysql: mysql.pool,
         graphReader,
+        courseGraphReader,
         asOf: () => new Date(AS_OF)
     });
     return { service, mysql: mysql.state, graphCalls };
@@ -170,12 +185,97 @@ test('batches learner-scoped evidence across candidate and prerequisite concepts
     'the MySQL snapshot uses a fixed repeatable-read transaction before fetching evidence');
 });
 
+test('review gap data includes every validated course concept and its evidence-qualified prerequisite state', async () => {
+    const { service } = serviceHarness();
+    const result = await service.getRecommendationResultForLearner({ learnerId: 7, courseId: COURSE_ID });
+    assert.deepEqual(result.concepts.map(item => item.conceptId), [1, 2, 3, 4]);
+    const unknown = result.concepts.find(item => item.conceptId === 4);
+    assert.equal(unknown.mastery, null);
+    assert.equal(unknown.evidenceStatus, 'UNKNOWN');
+    assert.equal(unknown.assessmentCount, 0);
+    const dependent = result.concepts.find(item => item.conceptId === 3);
+    assert.deepEqual(dependent.prerequisites.map(item => item.conceptId), [1, 2]);
+    assert.ok(dependent.prerequisites.every(item => item.satisfied === true));
+    assert.deepEqual(result.coursePrerequisiteEligibility, { eligible: true, prerequisites: [] });
+});
+
+test('cold-start results contain only prerequisite-ready concepts and preserve UNKNOWN mastery', async () => {
+    const { service } = serviceHarness({ mysql: { evidence: [] } });
+    const result = await service.getRecommendationResultForLearner({ learnerId: 7, courseId: COURSE_ID });
+
+    assert.equal(result.recommendationMode, 'cold_start');
+    assert.deepEqual(result.recommendations.map(item => item.conceptId), [1, 4]);
+    assert.ok(result.recommendations.every(item => item.mastery === null && item.evidenceStatus === 'UNKNOWN'));
+    assert.ok(result.recommendations.every(item => item.prerequisiteReadiness.totalCount === 0));
+    assert.equal(result.recommendations.some(item => [2, 3].includes(item.conceptId)), false,
+        'concepts with unmet prerequisites are excluded');
+});
+
+test('recommendations transition from cold-start to adaptive when course evidence appears', async () => {
+    const evidence = [];
+    const { service } = serviceHarness({ mysql: { evidence } });
+    const input = { learnerId: 7, courseId: COURSE_ID };
+
+    const coldStart = await service.getRecommendationResultForLearner(input);
+    assert.equal(coldStart.recommendationMode, 'cold_start');
+    evidence.push(...evidenceRows);
+
+    const adaptive = await service.getRecommendationResultForLearner(input);
+    assert.equal(adaptive.recommendationMode, 'adaptive');
+    assert.deepEqual(adaptive.recommendations.map(item => item.conceptId), [4, 3, 2]);
+    assert.ok(adaptive.recommendations.some(item => item.evidenceStatus === 'EVIDENCE_QUALIFIED'));
+});
+
+test('course-level prerequisites block recommendations until prerequisite course mastery is evidence-qualified', async t => {
+    const prerequisiteGraphId = 'COURSE-22222222-2222-4222-8222-222222222222';
+    const courseRows = [
+        { courseId: 1, graphCourseId: COURSE_ID, title: 'Database Concepts' },
+        { courseId: 2, graphCourseId: prerequisiteGraphId, title: 'Database Foundations' }
+    ];
+    const coursePrerequisites = [{ relationshipId: 91, prerequisiteCourseId: 2, targetCourseId: 1 }];
+    const courseConcepts = [
+        ...candidateRows.map(row => ({ courseGraphId: COURSE_ID, conceptId: row.conceptId })),
+        { courseGraphId: prerequisiteGraphId, conceptId: 5 }
+    ];
+    const allConcepts = [...concepts, { conceptId: 5, conceptName: 'Foundational Concept', graphConceptId: 'CONCEPT-5' }];
+    const courseReader = async ids => new Map([
+        [COURSE_ID, [prerequisiteGraphId]],
+        [prerequisiteGraphId, []]
+    ].filter(([id]) => ids.includes(id)));
+    const options = {
+        mysql: { concepts: allConcepts, coursePrerequisites, relevantCourses: courseRows, courseConcepts },
+        courseGraphReader: courseReader
+    };
+    await t.test('unknown prerequisite mastery returns no recommendations', async () => {
+        const { service } = serviceHarness(options);
+        const result = await service.getRecommendationResultForLearner({ learnerId: 7, courseId: COURSE_ID });
+        assert.equal(result.recommendationMode, 'course_prerequisite_blocked');
+        assert.deepEqual(result.recommendations, []);
+        assert.ok(Array.isArray(result.concepts), 'verified concept evidence remains available to Review Gaps');
+        assert.deepEqual(result.coursePrerequisiteEligibility.prerequisites, [
+            { courseId: 2, title: 'Database Foundations', satisfied: false }
+        ]);
+    });
+    await t.test('qualified mastery at 80 unlocks the target course recommendations', async () => {
+        const evidence = [
+            { conceptId: 5, assessmentId: 50, score: 80, assessmentDate: AS_OF, questionCount: 5, correctCount: 4, timestampProvenance: 'utc' },
+            { conceptId: 5, assessmentId: 51, score: 80, assessmentDate: AS_OF, questionCount: 5, correctCount: 4, timestampProvenance: 'utc' }
+        ];
+        const { service } = serviceHarness({ ...options, mysql: { ...options.mysql, evidence } });
+        const result = await service.getRecommendationResultForLearner({ learnerId: 7, courseId: COURSE_ID });
+        assert.equal(result.recommendationMode, 'cold_start');
+        assert.ok(result.recommendations.length > 0);
+        assert.equal(result.coursePrerequisiteEligibility.eligible, true);
+    });
+});
+
 test('normalizes numeric strings and preserves NULL historical date, NULL counts, and provenance for the ranker', async () => {
     let rankerInput;
     const mysql = createMysql();
     const service = createRecommendationService({
         mysql: mysql.pool,
         graphReader: async () => baseGraphSnapshot(),
+        courseGraphReader: async ids => new Map(ids.map(id => [id, []])),
         asOf: () => AS_OF,
         ranker(candidates, options) {
             rankerInput = { candidates, options };
@@ -206,6 +306,7 @@ test('unknown mastery is supplied when a concept has no assessment rows', async 
     const service = createRecommendationService({
         mysql: mysql.pool,
         graphReader: async () => baseGraphSnapshot(),
+        courseGraphReader: async ids => new Map(ids.map(id => [id, []])),
         asOf: () => AS_OF,
         ranker(input) { candidates = input; return []; }
     });
@@ -325,9 +426,10 @@ test('MySQL and Neo4j failures fail closed and MySQL connections are cleaned up'
         assert.equal(mysql.releaseCount, 0);
     });
     await t.test('graph failure occurs after MySQL transaction commits and connection releases', async () => {
-        const { service, mysql } = serviceHarness({ graphError: true });
+        const original = Object.assign(new Error('Neo4j unavailable'), { code: 'ServiceUnavailable' });
+        const { service, mysql } = serviceHarness({ graphError: original });
         await assert.rejects(service.getRecommendationsForLearner({ learnerId: 7, courseId: COURSE_ID }), error =>
-            error.code === 'PREREQUISITE_GRAPH_UNAVAILABLE');
+            error.code === 'PREREQUISITE_GRAPH_UNAVAILABLE' && error.cause === original);
         assert.equal(mysql.commitCount, 1);
         assert.equal(mysql.releaseCount, 1);
         assert.equal(mysql.destroyCount, 0);
@@ -345,6 +447,7 @@ test('MySQL and Neo4j failures fail closed and MySQL connections are cleaned up'
         const service = createRecommendationService({
             mysql: mysql.pool,
             graphReader: async () => baseGraphSnapshot(),
+            courseGraphReader: async ids => new Map(ids.map(id => [id, []])),
             asOf: () => AS_OF
         });
         await assert.rejects(service.getRecommendationsForLearner({ learnerId: 701, courseId: COURSE_ID }), error =>
@@ -358,6 +461,7 @@ test('MySQL and Neo4j failures fail closed and MySQL connections are cleaned up'
         const service = createRecommendationService({
             mysql: mysql.pool,
             graphReader: async () => baseGraphSnapshot(),
+            courseGraphReader: async ids => new Map(ids.map(id => [id, []])),
             asOf: () => AS_OF
         });
         await assert.rejects(service.getRecommendationsForLearner({ learnerId: 7, courseId: COURSE_ID }), error =>

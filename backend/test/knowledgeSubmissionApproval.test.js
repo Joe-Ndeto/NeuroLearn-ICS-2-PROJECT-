@@ -49,12 +49,14 @@ function createHarness({ type = 'CONCEPT', data, status = 'pending', edges = [],
             submission_type: type,
             submission_data: JSON.stringify(data || defaultData(type)),
             status,
+            submitted_by: 9,
             submitted_at: 'now',
             reviewed_by: null,
             review_notes: null,
             reviewed_at: null
         },
         concepts: concepts.map(row => ({ ...row })),
+        canonicalCourses: [],
         edges: edges.map(row => ({ ...row })),
         resources: [],
         associations: concepts.map(concept => ({ concept_id: concept.concept_id, course_graph_id: courses[0] })),
@@ -104,6 +106,7 @@ function createHarness({ type = 'CONCEPT', data, status = 'pending', edges = [],
             transactionSnapshot = structuredClone({
                 submission: state.submission,
                 concepts: state.concepts,
+                canonicalCourses: state.canonicalCourses,
                 edges: state.edges,
                 resources: state.resources,
                 associations: state.associations,
@@ -188,6 +191,9 @@ function createHarness({ type = 'CONCEPT', data, status = 'pending', edges = [],
                     .map(row => ({ concept_id: row.concept_id }));
                 return [rows, []];
             }
+            if (normalized.startsWith('SELECT course_id FROM course WHERE normalized_title')) {
+                return [state.canonicalCourses.filter(row => row.normalized_title === params[0]).map(row => ({ course_id: row.course_id })), []];
+            }
             if (normalized.startsWith('SELECT prerequisite_id FROM concept_prerequisite')) {
                 const found = state.edges.filter(row =>
                     Number(row.prerequisite_concept_id) === Number(params[0]) &&
@@ -209,6 +215,16 @@ function createHarness({ type = 'CONCEPT', data, status = 'pending', edges = [],
                 state.concepts.push(row);
                 transactionWrites = true;
                 return [{ insertId: row.concept_id, affectedRows: 1 }, []];
+            }
+            if (normalized.startsWith('INSERT INTO course')) {
+                const row = {
+                    course_id: ++state.nextId, graph_course_id: params[0], title: params[1],
+                    normalized_title: params[2], description: params[3], difficulty_level: params[4],
+                    created_by: params[5], approved_by: params[6], approved_submission_id: params[7]
+                };
+                state.canonicalCourses.push(row);
+                transactionWrites = true;
+                return [{ insertId: row.course_id, affectedRows: 1 }, []];
             }
             if (normalized.startsWith('INSERT INTO concept_course')) {
                 state.associations.push({ concept_id: params[0], course_graph_id: params[1] });
@@ -291,12 +307,29 @@ function createHarness({ type = 'CONCEPT', data, status = 'pending', edges = [],
         async execute(sql, params = []) {
             const normalized = sql.replace(/\s+/g, ' ').trim();
             state.calls.push(`POOL ${normalized}`);
+            if (normalized.startsWith('SELECT course.graph_course_id AS course_id')) {
+                const requestedCourse = normalized.includes('WHERE course.graph_course_id = ?') ? params[0] : null;
+                const rows = state.associations.flatMap(association => {
+                    const course = state.canonicalCourses.find(item => item.graph_course_id === association.course_graph_id);
+                    const concept = state.concepts.find(item => Number(item.concept_id) === Number(association.concept_id));
+                    if (!course || !concept?.graph_concept_id || (requestedCourse && course.graph_course_id !== requestedCourse)) return [];
+                    return [{ course_id: course.graph_course_id, course_name: course.title, concept_id: concept.concept_id, concept_name: concept.concept_name }];
+                });
+                return [rows, []];
+            }
             if (normalized.startsWith('SELECT submission_type, submission_data, status')) {
                 return [[state.submission ? {
                     submission_type: state.submission.submission_type,
                     submission_data: state.submission.submission_data,
                     status: state.submission.status
                 } : null].filter(Boolean), []];
+            }
+            if (normalized.startsWith('SELECT 1 FROM course INNER JOIN concept_course')) {
+                const [courseId, conceptId] = params;
+                const exists = state.canonicalCourses.some(course => course.graph_course_id === courseId) &&
+                    state.associations.some(association => association.course_graph_id === courseId && Number(association.concept_id) === Number(conceptId)) &&
+                    state.concepts.some(concept => Number(concept.concept_id) === Number(conceptId) && concept.graph_concept_id);
+                return [exists ? [{ 1: 1 }] : [], []];
             }
             if (normalized.startsWith('SELECT s.submission_id, s.submission_type')) {
                 if (state.adminLookupFailure) throw new Error('response lookup failed');
@@ -330,14 +363,15 @@ function createHarness({ type = 'CONCEPT', data, status = 'pending', edges = [],
 
 function defaultData(type) {
     if (type === 'CONCEPT') return { name: 'Graph Theory', description: 'Graphs' };
+    if (type === 'COURSE') return { title: 'Distributed Databases', description: 'Advanced database systems' };
     if (type === 'PREREQUISITE') return { prerequisiteId: 1, targetId: 2 };
     return { conceptId: 1, title: 'Resource', type: 'video', url: 'https://example.test/resource' };
 }
 
 const conceptRows = [
-    { concept_id: 1, graph_concept_id: GRAPH_A },
-    { concept_id: 2, graph_concept_id: GRAPH_B },
-    { concept_id: 3, graph_concept_id: 'CONCEPT-cccccccc-cccc-4ccc-8ccc-cccccccccccc' }
+    { concept_id: 1, concept_name: 'Graph A', graph_concept_id: GRAPH_A },
+    { concept_id: 2, concept_name: 'Graph B', graph_concept_id: GRAPH_B },
+    { concept_id: 3, concept_name: 'Graph C', graph_concept_id: 'CONCEPT-cccccccc-cccc-4ccc-8ccc-cccccccccccc' }
 ];
 
 function review(overrides = {}) {
@@ -363,11 +397,60 @@ test('approves concepts with course associations and one typed outbox task', asy
     assert.equal(state.releases, 1);
 });
 
+test('student resource options include only canonical approved course-concept associations', async () => {
+    const state = createHarness({ concepts: conceptRows });
+    state.canonicalCourses.push(
+        { course_id: 90, graph_course_id: COURSE_1, title: 'Approved course' },
+        { course_id: 91, graph_course_id: COURSE_2, title: 'Course without concepts' }
+    );
+    const options = await service.getApprovedCourseConceptOptions();
+    assert.deepEqual(options, [{
+        courseId: COURSE_1, name: 'Approved course',
+        concepts: [
+            { conceptId: 1, name: 'Graph A' },
+            { conceptId: 2, name: 'Graph B' },
+            { conceptId: 3, name: 'Graph C' }
+        ]
+    }]);
+    const scoped = await service.getCourseConceptOptions(COURSE_1);
+    assert.deepEqual(scoped.map(item => item.concept_id), [1, 2, 3]);
+});
+
 test('student concept submissions need no difficulty and admin choice overrides historical suggestion', async () => {
     const state = createHarness({ data: { name: 'Graph Theory', description: 'Graphs', difficultyLevel: 'Legacy text' } });
     await review({ difficultyLevel: 'Advanced' });
     assert.equal(state.concepts[0].difficulty_level, 'Advanced');
     assert.equal(state.outbox[0].canonical_record_id, state.concepts[0].concept_id);
+});
+
+test('approves a proposed course with administrator difficulty and an outbox projection', async () => {
+    const state = createHarness({ type: 'COURSE' });
+    mockGetAllCourses = async () => [];
+    const result = await review({ courseIds: undefined, difficultyLevel: 'Advanced' });
+    assert.equal(result.outcome, 'reviewed');
+    assert.equal(state.canonicalCourses.length, 1);
+    assert.equal(state.canonicalCourses[0].title, 'Distributed Databases');
+    assert.equal(state.canonicalCourses[0].difficulty_level, 'Advanced');
+    assert.equal(state.canonicalCourses[0].created_by, 9);
+    assert.equal(state.canonicalCourses[0].approved_by, 7);
+    assert.equal(state.outbox[0].canonical_record_type, 'COURSE');
+    assert.equal(state.outbox[0].canonical_record_id, state.canonicalCourses[0].course_id);
+});
+
+test('course approval requires a valid administrator difficulty and blocks normalized duplicate courses', async t => {
+    await t.test('missing difficulty', async () => {
+        const state = createHarness({ type: 'COURSE' });
+        mockGetAllCourses = async () => [];
+        await assert.rejects(review({ courseIds: undefined, difficultyLevel: undefined }), error => error.code === 'invalid_difficulty_level');
+        assert.equal(state.canonicalCourses.length, 0);
+    });
+    await t.test('duplicate normalized name', async () => {
+        const state = createHarness({ type: 'COURSE' });
+        mockGetAllCourses = async () => [];
+        state.canonicalCourses.push({ course_id: 88, normalized_title: 'distributed databases' });
+        await assert.rejects(review({ courseIds: undefined, difficultyLevel: 'Beginner' }), error => error.code === 'duplicate_course');
+        assert.equal(state.outbox.length, 0);
+    });
 });
 
 test('rejects missing or invalid admin difficulty before canonical transaction', async t => {
@@ -421,6 +504,28 @@ test('resource approval requires a selected Database Concept and writes that ass
         await review({ conceptId: 2 });
         assert.equal(state.resources[0].concept_id, 2);
         assert.equal(state.outbox[0].canonical_record_type, 'RESOURCE');
+    });
+});
+
+test('uploaded resource approval retains the submitted canonical course and concept', async t => {
+    const data = {
+        title: 'Joins notes', type: 'document', courseId: COURSE_1, conceptId: 2,
+        document: { filename: '11111111-1111-4111-8111-111111111111.pdf', originalName: 'joins.pdf' }
+    };
+    const state = createHarness({ type: 'RESOURCE', data, concepts: conceptRows });
+    state.canonicalCourses.push({ course_id: 5, graph_course_id: COURSE_1 });
+    const result = await review({ conceptId: 2 });
+    assert.equal(result.outcome, 'reviewed');
+    assert.equal(state.resources[0].concept_id, 2);
+    assert.match(state.resources[0].file_url, /\/api\/submissions\/resources\/41\/document$/);
+    assert.equal(state.outbox[0].canonical_record_type, 'RESOURCE');
+
+    await t.test('administrator cannot replace the student selected concept', async () => {
+        const mismatchState = createHarness({ type: 'RESOURCE', data, concepts: conceptRows });
+        mismatchState.canonicalCourses.push({ course_id: 5, graph_course_id: COURSE_1 });
+        await assert.rejects(review({ conceptId: 1 }), error => error.name === 'ApprovalError' && error.code === 'resource_concept_mismatch');
+        assert.equal(mismatchState.resources.length, 0);
+        assert.equal(mismatchState.outbox.length, 0);
     });
 });
 

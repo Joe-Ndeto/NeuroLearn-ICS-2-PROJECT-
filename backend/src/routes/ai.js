@@ -10,6 +10,7 @@ const { GoogleGenAI } = require('@google/genai');
 const mysql = require('../config/mysql');
 const authenticateToken = require('../middleware/authenticateToken');
 const quizAttemptService = require('../services/quizAttemptService');
+const { getAllCourses } = require('../services/knowledgeGraphService');
 
 const router = express.Router();
 
@@ -86,25 +87,53 @@ function getSafeTextPath(filename) {
     return candidate;
 }
 
-// Retrieve extracted text only when the document belongs
-// to the authenticated learner.
-async function getProcessedText(documentId, learnerId) {
+// Retrieve extracted text only for its owner or a confirmed approved
+// resource associated with the selected canonical course.
+async function getProcessedText(documentId, learnerId, courseId = null, conceptId = null) {
     if (!Number.isInteger(documentId) || documentId < 1) {
         const error = new Error('A valid document ID is required.');
         error.status = 400;
         throw error;
     }
 
+    const sharedAccess = typeof courseId === 'string' && courseId.trim();
     const [rows] = await mysql.execute(
         `SELECT
-            document_id,
-            filename,
-            file_path,
-            processing_status
-         FROM uploaded_document
-         WHERE document_id = ?
-         AND learner_id = ?`,
-        [documentId, learnerId]
+            ud.document_id,
+            ud.filename,
+            ud.file_path,
+            ud.processing_status
+         FROM uploaded_document AS ud
+         WHERE ud.document_id = ?
+           AND (ud.learner_id = ? OR (? = 1 AND EXISTS (
+                SELECT 1
+                FROM knowledge_submissions AS s
+                INNER JOIN learning_resource AS lr
+                  ON lr.file_url = CONCAT('/api/submissions/resources/', s.submission_id, '/document')
+                INNER JOIN concept AS c ON c.concept_id = lr.concept_id
+                INNER JOIN concept_course AS cc ON cc.concept_id = c.concept_id
+                INNER JOIN course AS approved_course ON approved_course.graph_course_id = cc.course_graph_id
+                WHERE s.submission_type = 'RESOURCE'
+                  AND s.status = 'approved'
+                  AND JSON_UNQUOTE(JSON_EXTRACT(s.submission_data, '$.document.documentId')) = CAST(ud.document_id AS CHAR)
+                  AND cc.course_graph_id = ?
+                  AND (? = 0 OR lr.concept_id = ?)
+           )))
+           AND (? = 0 OR EXISTS (
+                SELECT 1
+                FROM knowledge_submissions AS scoped_submission
+                INNER JOIN learning_resource AS scoped_resource
+                  ON scoped_resource.file_url = CONCAT('/api/submissions/resources/', scoped_submission.submission_id, '/document')
+                INNER JOIN concept_course AS scoped_association ON scoped_association.concept_id = scoped_resource.concept_id
+                INNER JOIN course AS scoped_course ON scoped_course.graph_course_id = scoped_association.course_graph_id
+                WHERE scoped_submission.submission_type = 'RESOURCE'
+                  AND scoped_submission.status = 'approved'
+                  AND JSON_UNQUOTE(JSON_EXTRACT(scoped_submission.submission_data, '$.document.documentId')) = CAST(ud.document_id AS CHAR)
+                  AND scoped_association.course_graph_id = ?
+                  AND scoped_resource.concept_id = ?
+           ))`,
+        [documentId, learnerId, sharedAccess ? 1 : 0, sharedAccess ? courseId : '', Number.isSafeInteger(Number(conceptId)) && Number(conceptId) > 0 ? 1 : 0, Number(conceptId) || 0,
+            Number.isSafeInteger(Number(conceptId)) && Number(conceptId) > 0 ? 1 : 0, courseId || '', Number(conceptId) || 0]
     );
 
     if (!rows.length) {
@@ -117,13 +146,10 @@ async function getProcessedText(documentId, learnerId) {
 
     const document = rows[0];
 
-    console.log('[NeuroLearn] Loading document:', {
+    console.log('[NeuroLearn] Loading study document:', {
         documentId: document.document_id,
-        filename: document.filename,
-        filePath: document.file_path,
         processingStatus: document.processing_status,
-        projectRoot,
-        processedFolder
+        sharedCourseRequest: Boolean(sharedAccess)
     });
 
     if (String(document.processing_status).toLowerCase() !== 'processed') {
@@ -180,7 +206,6 @@ async function getProcessedText(documentId, learnerId) {
 
     let text = '';
     let matchedPath = null;
-    const missingPaths = [];
 
     for (const filename of uniqueNames) {
         const textPath = getSafeTextPath(filename);
@@ -194,7 +219,6 @@ async function getProcessedText(documentId, learnerId) {
             }
         } catch (error) {
             if (error.code === 'ENOENT') {
-                missingPaths.push(textPath);
                 continue;
             }
 
@@ -229,16 +253,10 @@ async function getProcessedText(documentId, learnerId) {
     if (!matchedPath || !text) {
         console.error('[NeuroLearn] Extracted text lookup failed:', {
             documentId,
-            originalFilename: document.filename,
-            storedFilePath: document.file_path,
-            expectedTextFiles: uniqueNames,
-            checkedPaths: missingPaths,
-            processedFolder
+            candidateCount: uniqueNames.length
         });
 
-        const error = new Error(
-            `Extracted text was not found for "${document.filename}". Expected file: ${uniqueNames.join(' or ') || 'unknown'}. Checked folder: ${processedFolder}. Check the backend terminal for details.`
-        );
+        const error = new Error('Processed text is unavailable for this document.');
         error.status = 404;
         throw error;
     }
@@ -253,7 +271,6 @@ async function getProcessedText(documentId, learnerId) {
 
     console.log('[NeuroLearn] Extracted text loaded:', {
         documentId,
-        textPath: matchedPath,
         characters: text.length
     });
 
@@ -282,10 +299,9 @@ router.post('/summarize', authenticateToken, async (req, res) => {
 
         const documentId = Number(req.body.documentId);
 
-        const { text } = await getProcessedText(
-            documentId,
-            req.user.learner_id
-        );
+        const { text } = await getProcessedText(documentId, req.user.learner_id,
+            typeof req.body.courseId === 'string' ? req.body.courseId.trim() : null,
+            req.body.conceptId);
 
         const response = await generateContentWithRetry({
             model: MODEL,
@@ -339,7 +355,9 @@ router.post('/chat', authenticateToken, async (req, res) => {
 
         const { document, text } = await getProcessedText(
             documentId,
-            req.user.learner_id
+            req.user.learner_id,
+            typeof req.body.courseId === 'string' ? req.body.courseId.trim() : null,
+            req.body.conceptId
         );
 
         const response = await generateContentWithRetry({
@@ -386,6 +404,24 @@ router.post('/chat', authenticateToken, async (req, res) => {
 
 router.post('/quiz', authenticateToken, async (req, res) => {
     try {
+        const courseId = typeof req.body?.courseId === 'string' ? req.body.courseId.trim() : '';
+        if (!courseId) {
+            return res.status(400).json({
+                success: false,
+                code: 'COURSE_REQUIRED',
+                message: 'Select a course before generating a quiz.'
+            });
+        }
+
+        const conceptId = Number(req.body?.conceptId);
+        if (!Number.isSafeInteger(conceptId) || conceptId < 1) {
+            return res.status(400).json({
+                success: false,
+                code: 'CONCEPT_REQUIRED',
+                message: 'Select an approved concept from the selected document before generating a quiz.'
+            });
+        }
+
         requireAI();
         const learnerId = req.user.learner_id;
         const documentId = Number(req.body.documentId);
@@ -401,20 +437,67 @@ router.post('/quiz', authenticateToken, async (req, res) => {
             });
         }
 
+        const availableCourses = await getAllCourses();
+        const matchingCourses = Array.isArray(availableCourses)
+            ? availableCourses.filter(course => course?.course_id === courseId)
+            : [];
+        if (matchingCourses.length !== 1) {
+            return res.status(404).json({
+                success: false,
+                code: 'COURSE_NOT_FOUND',
+                message: 'The selected course is not available.'
+            });
+        }
+
+        const [documentAssociations] = await mysql.execute(
+            `SELECT 1
+             FROM uploaded_document AS ud
+             INNER JOIN knowledge_submissions AS s
+               ON s.submission_type = 'RESOURCE' AND s.status = 'approved'
+              AND JSON_UNQUOTE(JSON_EXTRACT(s.submission_data, '$.document.documentId')) = CAST(ud.document_id AS CHAR)
+             INNER JOIN learning_resource AS lr
+               ON lr.file_url = CONCAT('/api/submissions/resources/', s.submission_id, '/document')
+             INNER JOIN concept_course AS cc ON cc.concept_id = lr.concept_id
+             INNER JOIN course AS approved_course ON approved_course.graph_course_id = cc.course_graph_id
+             WHERE ud.document_id = ? AND ud.processing_status = 'processed'
+               AND lr.concept_id = ? AND cc.course_graph_id = ?
+             LIMIT 1`, [documentId, conceptId, courseId]
+        );
+        if (!documentAssociations.length) {
+            return res.status(404).json({
+                success: false,
+                code: 'DOCUMENT_CONCEPT_UNAVAILABLE',
+                message: 'The selected document is not an approved, processed resource for that concept and course.'
+            });
+        }
+
         const { text } = await getProcessedText(
             documentId,
-            learnerId
+            learnerId,
+            courseId
         );
 
         const [concepts] = await mysql.execute(
-            `SELECT concept_id, concept_name, description
-             FROM concept
-             ORDER BY concept_id`
+            `SELECT c.concept_id, c.concept_name, c.description, c.graph_concept_id
+             FROM concept AS c
+             INNER JOIN concept_course AS cc ON cc.concept_id = c.concept_id
+             WHERE cc.course_graph_id = ? AND c.concept_id = ?
+             ORDER BY c.concept_id`,
+            [courseId, conceptId]
         );
 
         if (!concepts.length) {
             return res.status(409).json({
-                error: 'No concepts exist yet. Add concepts to the concept table before generating quizzes.'
+                success: false,
+                code: 'COURSE_HAS_NO_CONCEPTS',
+                message: 'No concepts are currently associated with this course. Ask an administrator to review its concept associations.'
+            });
+        }
+        if (concepts.some(concept => typeof concept.graph_concept_id !== 'string' || !concept.graph_concept_id.trim())) {
+            return res.status(503).json({
+                success: false,
+                code: 'COURSE_CONCEPT_MAPPING_UNAVAILABLE',
+                message: 'Course concepts could not be validated for quiz generation.'
             });
         }
 
@@ -546,9 +629,10 @@ router.post('/quiz', authenticateToken, async (req, res) => {
                 !Number.isInteger(conceptId) ||
                 !validConceptIds.has(conceptId)
             ) {
-                throw new Error(
-                    'The generated quiz contains an invalid question or concept mapping. Please generate it again.'
-                );
+                const error = new Error('The generated quiz did not match the selected course. Please try again.');
+                error.status = 502;
+                error.code = 'INVALID_GENERATED_QUIZ';
+                throw error;
             }
 
             const concept = conceptList.find(

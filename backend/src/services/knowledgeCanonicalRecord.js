@@ -190,6 +190,44 @@ async function loadCanonicalRecord(queryable, task, { lockRecords = false } = {}
         return resource;
     }
 
+    if (task.canonical_record_type === 'COURSE') {
+        const [rows] = await queryable.execute(
+            `SELECT course_id, graph_course_id, title, description, difficulty_level
+             FROM course WHERE course_id = ?${lockClause}`,
+            [recordId]
+        );
+        if (!rows.length) invalid('Canonical course record is missing.');
+        const course = rows[0];
+        if (!validId(course.course_id) || Number(course.course_id) !== recordId) invalid('Canonical course ID is invalid.');
+        graphId(course.graph_course_id, 'course');
+        requiredText(course.title, 'course title', 200);
+        optionalText(course.description, 'course description', 65535);
+        if (!['Beginner', 'Intermediate', 'Advanced'].includes(course.difficulty_level)) invalid('Canonical course difficulty is invalid.');
+        return course;
+    }
+
+    if (task.canonical_record_type === 'COURSE_PREREQUISITE') {
+        const [rows] = await queryable.execute(
+            `SELECT cp.course_prerequisite_id, cp.prerequisite_course_id, cp.target_course_id, cp.is_active,
+                    prerequisite.graph_course_id AS prerequisite_graph_id,
+                    target.graph_course_id AS target_graph_id
+             FROM course_prerequisite AS cp
+             INNER JOIN course AS prerequisite ON prerequisite.course_id = cp.prerequisite_course_id
+             INNER JOIN course AS target ON target.course_id = cp.target_course_id
+             WHERE cp.course_prerequisite_id = ?${lockClause}`,
+            [recordId]
+        );
+        if (!rows.length) invalid('Canonical course prerequisite record is missing.');
+        const relation = rows[0];
+        if (!validId(relation.course_prerequisite_id) || Number(relation.course_prerequisite_id) !== recordId ||
+            !validId(relation.prerequisite_course_id) || !validId(relation.target_course_id) ||
+            Number(relation.prerequisite_course_id) === Number(relation.target_course_id) ||
+            ![0, 1, true, false].includes(relation.is_active)) invalid('Canonical course prerequisite is malformed.');
+        graphId(relation.prerequisite_graph_id, 'prerequisite course');
+        graphId(relation.target_graph_id, 'target course');
+        return relation;
+    }
+
     invalid('Unsupported canonical record type.');
 }
 

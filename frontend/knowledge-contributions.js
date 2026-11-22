@@ -40,13 +40,21 @@
         return payload;
     }
 
+    function validateCoursePayload(fields) {
+        const title = requiredText(fields.title, 'Course title', 200);
+        const description = optionalText(fields.description, 'Description', 5000);
+        return { title, description };
+    }
+
     function validateResourcePayload(fields) {
         const title = requiredText(fields.title, 'Resource title', 255);
+        const courseId = requiredText(fields.courseId, 'Approved course', 100);
+        const conceptId = requiredText(fields.conceptId, 'Approved concept', 100);
         if (!fields.file || !fields.file.name) throw new SubmissionValidationError('Choose a PDF, PowerPoint or Word document.');
         if (!isResourceSubmissionReady(title, fields.file)) {
             throw new SubmissionValidationError('Choose a PDF, PowerPoint or Word document.');
         }
-        return { title, type: 'document', file: fields.file };
+        return { title, courseId, conceptId, type: 'document', file: fields.file };
     }
 
     const RESOURCE_FILE_EXTENSIONS = new Set(['.pdf', '.ppt', '.pptx', '.doc', '.docx']);
@@ -58,6 +66,48 @@
         const filename = file.name.trim().toLowerCase();
         const separator = filename.lastIndexOf('.');
         return separator >= 0 && RESOURCE_FILE_EXTENSIONS.has(filename.slice(separator));
+    }
+
+    const RESOURCE_RETRY_STORAGE_KEY = 'neurolearnResourceSubmissionRetry';
+
+    function resourceSubmissionSignature({ title, courseId, conceptId, file }) {
+        return JSON.stringify([
+            String(title || '').trim(),
+            String(courseId || ''),
+            String(conceptId || ''),
+            String(file?.name || ''),
+            Number(file?.size || 0),
+            Number(file?.lastModified || 0)
+        ]);
+    }
+
+    function createResourceIdempotencyKey({ title, courseId, conceptId, file, storage, cryptoProvider }) {
+        const signature = resourceSubmissionSignature({ title, courseId, conceptId, file });
+        try {
+            const stored = JSON.parse(storage?.getItem(RESOURCE_RETRY_STORAGE_KEY) || 'null');
+            if (stored?.signature === signature &&
+                typeof stored.key === 'string' &&
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(stored.key)) {
+                return stored.key;
+            }
+        } catch {
+            // Invalid browser retry state is replaced with a fresh key.
+        }
+
+        const key = cryptoProvider?.randomUUID?.();
+        if (typeof key !== 'string') {
+            throw new SubmissionValidationError('Secure retry protection is unavailable. Refresh the page and try again.');
+        }
+        storage?.setItem(RESOURCE_RETRY_STORAGE_KEY, JSON.stringify({ key, signature }));
+        return key;
+    }
+
+    function clearResourceIdempotencyKey(storage) {
+        try {
+            storage?.removeItem(RESOURCE_RETRY_STORAGE_KEY);
+        } catch {
+            // A confirmed submission remains successful even if browser storage is unavailable.
+        }
     }
 
     function validatePrerequisitePayload(fields) {
@@ -156,9 +206,21 @@
                     throw new Error('The server did not confirm the submission.');
                 }
                 form.reset();
-                afterReset();
-                showMessage(feedback, successMessage, 'success');
-                await afterSuccess();
+                try {
+                    afterReset();
+                } catch {
+                    // A UI reset callback cannot undo server-confirmed success.
+                }
+                showMessage(feedback,
+                    typeof result.message === 'string' && result.message.trim()
+                        ? result.message
+                        : successMessage,
+                    'success');
+                try {
+                    await afterSuccess();
+                } catch {
+                    // The server already confirmed success; a history refresh must not relabel it as a failed submission.
+                }
             } catch (error) {
                 if (error.status === 401) {
                     showMessage(feedback, 'Your session expired. Please sign in again.', 'error');
@@ -196,7 +258,9 @@
     const SUBMISSION_TYPE_LABELS = Object.freeze({
         CONCEPT: 'Concept',
         RESOURCE: 'Learning resource',
-        PREREQUISITE: 'Prerequisite'
+        PREREQUISITE: 'Prerequisite',
+        COURSE: 'Course proposal',
+        COURSE_PREREQUISITE: 'Course prerequisite update'
     });
 
     const REVIEW_STATUS_LABELS = Object.freeze({
@@ -214,6 +278,10 @@
                 return typeof data.name === 'string' && data.name.trim()
                     ? data.name.trim()
                     : 'Concept submission';
+            case 'COURSE':
+                return typeof data.title === 'string' && data.title.trim()
+                    ? data.title.trim()
+                    : 'Course proposal';
             case 'RESOURCE':
                 return typeof data.title === 'string' && data.title.trim()
                     ? data.title.trim()
@@ -384,15 +452,20 @@
             }
         }) : null;
         const conceptForm = document.getElementById('concept-submission-form');
+        const courseForm = document.getElementById('course-submission-form');
         const resourceForm = document.getElementById('resource-submission-form');
         const resourceButton = resourceForm.querySelector('[type="submit"]');
         const resourceFeedback = document.getElementById('resource-submission-feedback');
         const resourceFile = document.getElementById('resource-file');
         const resourceTitle = document.getElementById('resource-title');
+        const resourceCourse = document.getElementById('resource-course');
+        const resourceConcept = document.getElementById('resource-concept');
+        const resourceConceptHelp = document.getElementById('resource-concept-help');
         const resourceFileName = document.getElementById('resource-file-name');
         const resourceFileRemove = document.getElementById('resource-file-remove');
         let resourceSubmissionPending = false;
-        const resourceReady = () => isResourceSubmissionReady(resourceTitle.value, resourceFile.files?.[0]);
+        const resourceReady = () => isResourceSubmissionReady(resourceTitle.value, resourceFile.files?.[0]) &&
+            Boolean(resourceCourse.value) && Boolean(resourceConcept.value);
         const updateResourceSubmitButton = () => {
             resourceButton.disabled = resourceSubmissionPending || !resourceReady();
         };
@@ -403,6 +476,59 @@
             updateResourceSubmitButton();
         };
         resourceTitle.addEventListener('input', updateResourceSubmitButton);
+        const resourceCourseOptions = [];
+        const setResourceConceptOptions = () => {
+            const course = resourceCourseOptions.find(item => String(item.courseId) === resourceCourse.value);
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = course ? 'Select a concept' : 'Select a course first';
+            placeholder.disabled = true;
+            placeholder.selected = true;
+            const options = (course?.concepts || []).map(item => {
+                const option = document.createElement('option');
+                option.value = String(item.conceptId);
+                option.textContent = `${item.name} (${item.conceptId})`;
+                return option;
+            });
+            resourceConcept.replaceChildren(placeholder, ...options);
+            resourceConcept.value = '';
+            resourceConcept.disabled = options.length === 0;
+            if (resourceConceptHelp) resourceConceptHelp.textContent = options.length
+                ? 'Select the approved concept this document teaches.'
+                : course ? 'No approved concepts are associated with this course yet.'
+                    : 'Choose the concept this document teaches.';
+            updateResourceSubmitButton();
+        };
+        resourceCourse.addEventListener('change', setResourceConceptOptions);
+        resourceConcept.addEventListener('change', updateResourceSubmitButton);
+        api.get('/submissions/resource-options').then(result => {
+            if (!Array.isArray(result?.courses)) throw new Error('Invalid approved resource options.');
+            resourceCourseOptions.push(...result.courses.filter(course =>
+                typeof course?.courseId === 'string' && Array.isArray(course.concepts) && course.concepts.length
+            ));
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = resourceCourseOptions.length ? 'Select an approved course' : 'No approved courses with concepts';
+            placeholder.disabled = true;
+            placeholder.selected = true;
+            const options = resourceCourseOptions.map(course => {
+                const option = document.createElement('option');
+                option.value = course.courseId;
+                option.textContent = course.name;
+                return option;
+            });
+            resourceCourse.replaceChildren(placeholder, ...options);
+            resourceCourse.disabled = options.length === 0;
+            setResourceConceptOptions();
+        }).catch(() => {
+            resourceCourse.disabled = true;
+            resourceCourse.replaceChildren();
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'Approved courses could not be loaded';
+            resourceCourse.appendChild(option);
+            if (resourceConceptHelp) resourceConceptHelp.textContent = 'Refresh the page to retry loading approved courses and concepts.';
+        });
         resourceFile.addEventListener('change', updateResourceFile);
         resourceFileRemove.addEventListener('click', () => {
             resourceFile.value = '';
@@ -410,6 +536,22 @@
         });
         updateResourceSubmitButton();
         const conceptFeedback = document.getElementById('concept-submission-feedback');
+
+        if (courseForm) {
+            courseForm.addEventListener('submit', createSubmissionHandler({
+                api,
+                form: courseForm,
+                submitButton: courseForm.querySelector('[type="submit"]'),
+                feedback: document.getElementById('course-submission-feedback'),
+                endpoint: '/submissions/courses',
+                buildPayload: () => validateCoursePayload({
+                    title: document.getElementById('course-title').value,
+                    description: document.getElementById('course-description').value
+                }),
+                successMessage: 'Course proposal submitted for administrator review.',
+                afterSuccess: () => history?.refresh()
+            }));
+        }
 
         conceptForm.addEventListener('submit', createSubmissionHandler({
             api,
@@ -438,16 +580,38 @@
             },
             buildPayload: () => validateResourcePayload({
                 title: document.getElementById('resource-title').value,
+                courseId: resourceCourse.value,
+                conceptId: resourceConcept.value,
                 file: resourceFile.files?.[0]
             }),
             send: payload => {
                 const formData = new FormData();
                 formData.append('title', payload.title);
+                formData.append('courseId', payload.courseId);
+                formData.append('conceptId', payload.conceptId);
                 formData.append('document', payload.file);
-                return api.post('/submissions/resources', formData);
+                const idempotencyKey = createResourceIdempotencyKey({
+                    title: payload.title,
+                    courseId: payload.courseId,
+                    conceptId: payload.conceptId,
+                    file: payload.file,
+                    storage: root.sessionStorage,
+                    cryptoProvider: root.crypto
+                });
+                return api.post('/submissions/resources', formData, {
+                    headers: { 'Idempotency-Key': idempotencyKey }
+                }).catch(error => {
+                    if (error.code === 'IDEMPOTENCY_KEY_REUSED') {
+                        clearResourceIdempotencyKey(root.sessionStorage);
+                    }
+                    throw error;
+                });
             },
             successMessage: 'Learning resource submitted for administrator review.',
-            afterReset: updateResourceFile,
+            afterReset() {
+                clearResourceIdempotencyKey(root.sessionStorage);
+                updateResourceFile();
+            },
             afterSuccess: () => history?.refresh()
         }));
 
@@ -459,6 +623,8 @@
     const api = {
         SubmissionValidationError,
         createSubmissionHandler,
+        createResourceIdempotencyKey,
+        clearResourceIdempotencyKey,
         conceptOptionLabel,
         createSubmissionHistory,
         formatSubmissionDate,
@@ -468,6 +634,7 @@
         renderSubmissionHistory,
         submissionSummary,
         validateConceptPayload,
+        validateCoursePayload,
         validatePrerequisitePayload,
         validateResourcePayload,
         isResourceSubmissionReady

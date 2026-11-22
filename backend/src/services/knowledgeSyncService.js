@@ -6,7 +6,7 @@ const {
     loadCanonicalRecord: loadAndValidateCanonicalRecord
 } = require('./knowledgeCanonicalRecord');
 
-const RECORD_TYPES = new Set(['CONCEPT', 'PREREQUISITE', 'RESOURCE']);
+const RECORD_TYPES = new Set(['CONCEPT', 'PREREQUISITE', 'RESOURCE', 'COURSE', 'COURSE_PREREQUISITE']);
 const ERROR_TEXT_LIMIT = 1000;
 
 class PermanentSyncError extends Error {
@@ -274,6 +274,46 @@ function createKnowledgeSyncService({
                 if (!result.records.length) {
                     throw new MissingGraphDependencyError('The resource concept is missing in Neo4j.');
                 }
+            } else if (task.canonical_record_type === 'COURSE') {
+                const duplicate = await run(
+                    `MATCH (existing:Course)
+                     WHERE toLower(trim(existing.name)) = toLower(trim($name))
+                       AND existing.course_id <> $courseId
+                     RETURN existing.course_id AS courseId LIMIT 1`,
+                    { name: record.title, courseId: record.graph_course_id }
+                );
+                if (duplicate.records.length) {
+                    throw new PermanentSyncError('A graph course with the same normalized title exists; administrator reconciliation is required.');
+                }
+                await run(
+                    `MERGE (c:Course {course_id: $courseId})
+                     ON CREATE SET c.created_at = datetime()
+                     SET c.name = $name, c.description = $description,
+                         c.difficulty_level = $difficultyLevel
+                     RETURN c.course_id AS courseId`,
+                    {
+                        courseId: record.graph_course_id,
+                        name: record.title,
+                        description: record.description || '',
+                        difficultyLevel: record.difficulty_level
+                    }
+                );
+            } else if (task.canonical_record_type === 'COURSE_PREREQUISITE') {
+                const query = record.is_active
+                    ? `MATCH (prerequisite:Course {course_id: $prerequisiteId})
+                       MATCH (target:Course {course_id: $targetId})
+                       MERGE (prerequisite)-[:PREREQUISITE_OF]->(target)
+                       RETURN prerequisite.course_id AS prerequisiteId`
+                    : `MATCH (prerequisite:Course {course_id: $prerequisiteId})
+                       MATCH (target:Course {course_id: $targetId})
+                       OPTIONAL MATCH (prerequisite)-[relationship:PREREQUISITE_OF]->(target)
+                       DELETE relationship
+                       RETURN prerequisite.course_id AS prerequisiteId`;
+                const result = await run(query, {
+                    prerequisiteId: record.prerequisite_graph_id,
+                    targetId: record.target_graph_id
+                });
+                if (!result.records.length) throw new MissingGraphDependencyError('A prerequisite course is missing in Neo4j.');
             } else {
                 throw new PermanentSyncError('Unsupported canonical record type.');
             }

@@ -1,6 +1,6 @@
 'use strict';
 
-const { randomUUID } = require('crypto');
+const { randomUUID, createHash } = require('crypto');
 const mysql = require('../config/mysql');
 const {
     CourseValidationError,
@@ -88,6 +88,67 @@ async function getDatabaseConceptOptions() {
     return { concepts, domainAvailable: true, emptyReason, diagnostics };
 }
 
+async function getApprovedCourseConceptOptions() {
+    const [rows] = await mysql.execute(
+        `SELECT course.graph_course_id AS course_id, course.title AS course_name,
+                concept.concept_id, concept.concept_name
+         FROM course
+         INNER JOIN concept_course AS association
+           ON association.course_graph_id = course.graph_course_id
+         INNER JOIN concept ON concept.concept_id = association.concept_id
+         WHERE concept.graph_concept_id IS NOT NULL
+           AND TRIM(concept.graph_concept_id) <> ''
+         ORDER BY course.title, concept.concept_name, concept.concept_id`
+    );
+    const courses = new Map();
+    for (const row of rows) {
+        if (!courses.has(row.course_id)) {
+            courses.set(row.course_id, { courseId: row.course_id, name: row.course_name, concepts: [] });
+        }
+        courses.get(row.course_id).concepts.push({ conceptId: Number(row.concept_id), name: row.concept_name });
+    }
+    return [...courses.values()];
+}
+
+async function getCourseConceptOptions(courseId) {
+    const normalizedCourseId = typeof courseId === 'string' ? courseId.trim() : '';
+    if (!normalizedCourseId || normalizedCourseId.length > 100) {
+        throw new ApprovalError('invalid_course_reference', 'A valid course is required.', 400);
+    }
+    const [rows] = await mysql.execute(
+        `SELECT course.graph_course_id AS course_id, course.title AS course_name,
+                concept.concept_id, concept.concept_name
+         FROM course
+         INNER JOIN concept_course AS association
+           ON association.course_graph_id = course.graph_course_id
+         INNER JOIN concept ON concept.concept_id = association.concept_id
+         WHERE course.graph_course_id = ?
+           AND concept.graph_concept_id IS NOT NULL
+           AND TRIM(concept.graph_concept_id) <> ''
+         ORDER BY concept.concept_name, concept.concept_id`, [normalizedCourseId]
+    );
+    return rows.map(row => ({ concept_id: Number(row.concept_id), name: row.concept_name }));
+}
+
+async function validateResourceCourseConcept(courseId, conceptId) {
+    const normalizedCourseId = typeof courseId === 'string' ? courseId.trim() : '';
+    const normalizedConceptId = Number(conceptId);
+    if (!normalizedCourseId || normalizedCourseId.length > 100 ||
+        !Number.isSafeInteger(normalizedConceptId) || normalizedConceptId < 1) return false;
+    const [rows] = await mysql.execute(
+        `SELECT 1
+         FROM course
+         INNER JOIN concept_course AS association
+           ON association.course_graph_id = course.graph_course_id
+         INNER JOIN concept ON concept.concept_id = association.concept_id
+         WHERE course.graph_course_id = ? AND concept.concept_id = ?
+           AND concept.graph_concept_id IS NOT NULL
+           AND TRIM(concept.graph_concept_id) <> ''
+         LIMIT 1`, [normalizedCourseId, normalizedConceptId]
+    );
+    return rows.length === 1;
+}
+
 async function getDatabaseConcepts() {
     return (await getDatabaseConceptOptions()).concepts;
 }
@@ -140,10 +201,12 @@ function parseSubmissionData(value) {
 }
 
 function formatSubmission(row) {
+    const submissionData = parseSubmissionData(row.submission_data);
+    if (submissionData && typeof submissionData === 'object') delete submissionData._idempotency;
     return {
         submissionId: row.submission_id,
         submissionType: row.submission_type,
-        submissionData: parseSubmissionData(row.submission_data),
+        submissionData,
         status: row.status,
         submittedAt: row.submitted_at,
         reviewedBy: row.reviewed_by,
@@ -486,6 +549,7 @@ async function reviewPendingSubmission({
     let validatedSubmissionData;
     let validatedCourseIds;
     let validatedDomainCourseIds;
+    let validatedGraphCourseId;
 
     if (status === 'approved') {
         const [preflightRows] = await mysql.execute(
@@ -520,6 +584,7 @@ async function reviewPendingSubmission({
                     throw new CourseValidationError('COURSES_NOT_FOUND', 'Concepts can only be associated with Database Concepts.');
                 }
             } catch (error) {
+                if (error instanceof ApprovalError) throw error;
                 if (error instanceof CourseValidationError) {
                     if (error.code === 'INVALID_COURSE_IDS') {
                         throw new ApprovalError('invalid_course_ids', error.message, 400);
@@ -534,17 +599,52 @@ async function reviewPendingSubmission({
                     503
                 );
             }
-        } else if (preflight.submission_type === 'RESOURCE') {
-            const selectedConceptId = Number(conceptId);
-            if (!Number.isSafeInteger(selectedConceptId) || selectedConceptId < 1) {
-                throw new ApprovalError('invalid_concept_reference', 'Select a Database Concept before approving this resource.', 400);
+        } else if (preflight.submission_type === 'COURSE') {
+            if (!CONCEPT_DIFFICULTY_LEVELS.has(difficultyLevel)) {
+                throw new ApprovalError('invalid_difficulty_level', 'Select a valid difficulty level before approving this course.', 400);
             }
-            const domainCourseIds = await getDatabaseDomainCourseIds();
-            if (!domainCourseIds.length) {
-                throw new ApprovalError('database_domain_unavailable', 'The existing Database Concepts course is unavailable.', 422);
+            const normalizedTitle = validatedSubmissionData.title.toLocaleLowerCase();
+            try {
+                const graphCourses = await getAllCourses();
+                const matching = graphCourses.filter(course => typeof course?.name === 'string' &&
+                    course.name.trim().toLocaleLowerCase() === normalizedTitle);
+                if (matching.length > 1) throw new ApprovalError('ambiguous_existing_course', 'Multiple graph courses match this title. Reconcile them before approval.', 409);
+                validatedGraphCourseId = matching[0]?.course_id || `COURSE-${randomUUID()}`;
+                if (typeof validatedGraphCourseId !== 'string' ||
+                    !/^COURSE-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(validatedGraphCourseId)) {
+                    throw new ApprovalError('invalid_existing_course_id', 'The matching graph course has an invalid identifier.', 422);
+                }
+            } catch (error) {
+                if (error instanceof ApprovalError) throw error;
+                throw new ApprovalError('course_lookup_unavailable', 'Existing courses could not be checked safely.', 503);
+            }
+        } else if (preflight.submission_type === 'RESOURCE') {
+            const hasUploadedDocument = Boolean(validatedSubmissionData.document);
+            const submittedConceptId = hasUploadedDocument ? validatedSubmissionData.conceptId : undefined;
+            const submittedCourseId = hasUploadedDocument ? validatedSubmissionData.courseId : undefined;
+            const selectedConceptId = submittedConceptId !== undefined ? Number(submittedConceptId) : Number(conceptId);
+            if (!Number.isSafeInteger(selectedConceptId) || selectedConceptId < 1) {
+                throw new ApprovalError('invalid_concept_reference', 'Select a valid approved concept before approving this resource.', 400);
+            }
+            if (submittedConceptId !== undefined) {
+                if (typeof submittedCourseId !== 'string' || !submittedCourseId.trim()) {
+                    throw new ApprovalError('invalid_course_reference', 'The submitted course association is invalid.', 422);
+                }
+                if (conceptId !== undefined && Number(conceptId) !== selectedConceptId) {
+                    throw new ApprovalError('resource_concept_mismatch', 'A resource must remain associated with the concept selected during submission.', 409);
+                }
+                if (!await validateResourceCourseConcept(submittedCourseId, selectedConceptId)) {
+                    throw new ApprovalError('invalid_concept_reference', 'The submitted concept is no longer associated with its approved course.', 422);
+                }
+                validatedSubmissionData.courseId = submittedCourseId;
+            } else {
+                const domainCourseIds = await getDatabaseDomainCourseIds();
+                if (!domainCourseIds.length) {
+                    throw new ApprovalError('database_domain_unavailable', 'The existing Database Concepts course is unavailable.', 422);
+                }
+                validatedSubmissionData.domainCourseIds = domainCourseIds;
             }
             validatedSubmissionData = { ...validatedSubmissionData, selectedConceptId };
-            validatedSubmissionData.domainCourseIds = domainCourseIds;
         } else if (preflight.submission_type === 'PREREQUISITE') {
             validatedDomainCourseIds = await getDatabaseDomainCourseIds();
             if (!validatedDomainCourseIds.length) {
@@ -599,7 +699,7 @@ async function reviewPendingSubmission({
         transactionStarted = true;
 
         const [submissionRows] = await connection.execute(
-            `SELECT submission_id, submission_type, submission_data, status,
+            `SELECT submission_id, submission_type, submission_data, status, submitted_by,
                     submitted_at, reviewed_by, review_notes, reviewed_at
              FROM knowledge_submissions
              WHERE submission_id = ?
@@ -686,6 +786,24 @@ async function reviewPendingSubmission({
                         [canonicalId, courseGraphId]
                     );
                 }
+            } else if (submission.submission_type === 'COURSE') {
+                const normalizedTitle = data.title.trim().toLocaleLowerCase();
+                const [existingCourses] = await connection.execute(
+                    'SELECT course_id FROM course WHERE normalized_title = ? LIMIT 1 FOR UPDATE',
+                    [normalizedTitle]
+                );
+                if (existingCourses.length) {
+                    throw new ApprovalError('duplicate_course', 'An approved course with this name already exists.', 409);
+                }
+                const [courseResult] = await connection.execute(
+                    `INSERT INTO course
+                        (graph_course_id, title, normalized_title, description, difficulty_level, created_by, approved_by, approved_submission_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [validatedGraphCourseId, data.title, normalizedTitle, data.description, difficultyLevel,
+                        submission.submitted_by, reviewerId, submissionId]
+                );
+                canonicalType = 'COURSE';
+                canonicalId = courseResult.insertId;
             } else if (submission.submission_type === 'PREREQUISITE') {
                 const referencedPrerequisite = await resolveConceptReferenceWithConnection(connection, data.prerequisiteId);
                 const referencedTarget = await resolveConceptReferenceWithConnection(connection, data.targetId);
@@ -763,21 +881,34 @@ async function reviewPendingSubmission({
                 canonicalType = 'PREREQUISITE';
                 canonicalId = prerequisiteResult.insertId;
             } else if (submission.submission_type === 'RESOURCE') {
-                // The selected association is reviewed separately from immutable learner payload data.
                 const selectedConceptId = validatedSubmissionData.selectedConceptId;
-                const resourceDomainCourseIds = validatedSubmissionData.domainCourseIds;
-                const domainPlaceholders = resourceDomainCourseIds.map(() => '?').join(', ');
-                const [eligibleConcepts] = await connection.execute(
-                    `SELECT c.concept_id, c.graph_concept_id
-                     FROM concept AS c
-                     INNER JOIN concept_course AS cc ON cc.concept_id = c.concept_id
-                     WHERE c.concept_id = ? AND c.graph_concept_id IS NOT NULL
-                       AND cc.course_graph_id IN (${domainPlaceholders})
-                     FOR UPDATE`, [selectedConceptId, ...resourceDomainCourseIds]
-                );
+                const submittedCourseId = validatedSubmissionData.courseId;
+                let eligibleConcepts;
+                if (submittedCourseId) {
+                    [eligibleConcepts] = await connection.execute(
+                        `SELECT c.concept_id, c.graph_concept_id
+                         FROM concept AS c
+                         INNER JOIN concept_course AS cc ON cc.concept_id = c.concept_id
+                         INNER JOIN course ON course.graph_course_id = cc.course_graph_id
+                         WHERE c.concept_id = ? AND cc.course_graph_id = ?
+                           AND c.graph_concept_id IS NOT NULL AND TRIM(c.graph_concept_id) <> ''
+                         FOR UPDATE`, [selectedConceptId, submittedCourseId]
+                    );
+                } else {
+                    const resourceDomainCourseIds = validatedSubmissionData.domainCourseIds;
+                    const domainPlaceholders = resourceDomainCourseIds.map(() => '?').join(', ');
+                    [eligibleConcepts] = await connection.execute(
+                        `SELECT c.concept_id, c.graph_concept_id
+                         FROM concept AS c
+                         INNER JOIN concept_course AS cc ON cc.concept_id = c.concept_id
+                         WHERE c.concept_id = ? AND c.graph_concept_id IS NOT NULL
+                           AND cc.course_graph_id IN (${domainPlaceholders})
+                         FOR UPDATE`, [selectedConceptId, ...resourceDomainCourseIds]
+                    );
+                }
                 const concept = eligibleConcepts[0];
                 if (!concept || !concept.graph_concept_id) {
-                    throw new ApprovalError('invalid_concept_reference', 'The selected concept is not an approved Database Concept.', 422);
+                    throw new ApprovalError('invalid_concept_reference', 'The selected concept is not approved for this resource.', 422);
                 }
 
                 const graphResourceId = `RESOURCE-${randomUUID()}`;
@@ -1026,6 +1157,13 @@ function validateSubmissionData(type, data) {
         };
     }
 
+    if (type === 'COURSE') {
+        return {
+            title: requiredText('title', 200),
+            description: optionalText('description', 5000)
+        };
+    }
+
     if (type === 'PREREQUISITE') {
         return {
             prerequisiteId: validateReference(data.prerequisiteId, 'prerequisiteId'),
@@ -1037,10 +1175,28 @@ function validateSubmissionData(type, data) {
         if (data.document && typeof data.document === 'object' &&
             /^[0-9a-f-]{36}\.(pdf|ppt|pptx|doc|docx)$/i.test(data.document.filename || '') &&
             typeof data.document.originalName === 'string') {
+            if ((data.courseId === undefined) !== (data.conceptId === undefined)) {
+                throw new ApprovalError('invalid_submission_data', 'Resource course and concept references must be supplied together.', 422);
+            }
+            if (data.document.documentId !== undefined &&
+                (!Number.isSafeInteger(Number(data.document.documentId)) || Number(data.document.documentId) < 1)) {
+                throw new ApprovalError('invalid_submission_data', 'Resource document reference is invalid.', 422);
+            }
             return {
+                ...(data.courseId === undefined ? {} : { courseId: validateReference(data.courseId, 'courseId') }),
+                ...(data.conceptId === undefined ? {} : { conceptId: validateReference(data.conceptId, 'conceptId') }),
                 title: requiredText('title', 255),
                 type: 'document',
-                document: data.document
+                document: {
+                    filename: data.document.filename,
+                    originalName: data.document.originalName,
+                    extension: data.document.extension,
+                    documentType: data.document.documentType,
+                    size: data.document.size,
+                    ...(data.document.documentId === undefined
+                        ? {}
+                        : { documentId: Number(data.document.documentId) })
+                }
             };
         }
         const url = requiredText('url', 500);
@@ -1248,6 +1404,177 @@ async function createPendingSubmission(submissionType, submissionData, learnerId
     return formatSubmission(rows[0]);
 }
 
+async function createPendingCourseSubmission({ title, description = '', learnerId }) {
+    const normalizedTitle = typeof title === 'string' ? title.trim() : '';
+    const courseDescription = typeof description === 'string' ? description.trim() : '';
+    if (!normalizedTitle || normalizedTitle.length > 200 || courseDescription.length > 5000) {
+        throw new ApprovalError('invalid_course_submission', 'Course title or description is invalid.', 400);
+    }
+    return createPendingSubmission('COURSE', {
+        title: normalizedTitle,
+        description: courseDescription
+    }, learnerId);
+}
+
+function resourceRequestError(status, code, message) {
+    const error = new Error(message);
+    error.status = status;
+    error.code = code;
+    return error;
+}
+
+async function findResourceSubmission(queryable, learnerId, idempotencyKey) {
+    const [rows] = await queryable.execute(
+        `SELECT s.submission_id, s.submission_type, s.submission_data, s.status,
+                s.submitted_at, s.reviewed_by, s.review_notes, s.reviewed_at,
+                ud.processing_status AS document_processing_status
+         FROM knowledge_submissions AS s
+         LEFT JOIN uploaded_document AS ud
+           ON ud.document_id = CAST(JSON_UNQUOTE(JSON_EXTRACT(s.submission_data, '$.document.documentId')) AS UNSIGNED)
+         WHERE s.submitted_by = ? AND s.submission_type = 'RESOURCE'
+           AND JSON_UNQUOTE(JSON_EXTRACT(s.submission_data, '$._idempotency.key')) = ?
+         ORDER BY s.submission_id DESC LIMIT 1`,
+        [learnerId, idempotencyKey]
+    );
+    return rows[0] || null;
+}
+
+function existingResourceResult(row, fingerprint) {
+    const data = parseSubmissionData(row.submission_data);
+    if (data?._idempotency?.fingerprint !== fingerprint) {
+        throw resourceRequestError(409, 'IDEMPOTENCY_KEY_REUSED', 'This submission retry key was already used for different document data. Change the title or file and submit again.');
+    }
+    const submission = formatSubmission(row);
+    if (!Number.isSafeInteger(Number(submission.submissionData?.document?.documentId))) {
+        throw resourceRequestError(503, 'SUBMISSION_LINK_UNAVAILABLE', 'The saved document submission could not be safely retrieved.');
+    }
+    return { submission, replayed: true, processingStatus: row.document_processing_status || 'unknown' };
+}
+
+async function createPendingResourceSubmission({ learnerId, title, courseId, conceptId, document, idempotencyKey, fingerprint }) {
+    if (typeof courseId !== 'string' || !courseId.trim() || courseId.length > 100 ||
+        !Number.isSafeInteger(Number(conceptId)) || Number(conceptId) < 1) {
+        throw resourceRequestError(400, 'RESOURCE_CONCEPT_REQUIRED', 'Select an approved course and concept for this document.');
+    }
+    if (typeof idempotencyKey !== 'string' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(idempotencyKey) ||
+        typeof fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(fingerprint)) {
+        throw resourceRequestError(400, 'INVALID_IDEMPOTENCY_KEY', 'A valid resource submission retry key is required.');
+    }
+    const connection = await mysql.getConnection();
+    let transactionOpen = false;
+    let connectionUsable = true;
+    let lockAcquired = false;
+    let commitAttempted = false;
+    let primaryError;
+    let result;
+    try {
+        const lockName = `nl-resource:${createHash('sha256').update(`${learnerId}:${idempotencyKey}`).digest('hex').slice(0, 40)}`;
+        const [lockRows] = await connection.execute('SELECT GET_LOCK(?, 8) AS acquired', [lockName]);
+        if (Number(lockRows[0]?.acquired) !== 1) {
+            throw resourceRequestError(503, 'RESOURCE_SUBMISSION_BUSY', 'This submission is still being processed. Please retry shortly.');
+        }
+        lockAcquired = true;
+
+        const existing = await findResourceSubmission(connection, learnerId, idempotencyKey);
+        if (existing) return existingResourceResult(existing, fingerprint);
+
+        await connection.beginTransaction();
+        transactionOpen = true;
+        const [documentResult] = await connection.execute(
+            `INSERT INTO uploaded_document
+                (learner_id, filename, file_type, file_size, file_path, processing_status)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [learnerId, document.originalName, document.extension.slice(1), document.size, document.filePath, document.processingStatus]
+        );
+        const submissionData = {
+            title,
+            courseId,
+            conceptId: Number(conceptId),
+            type: 'document',
+            document: {
+                filename: document.filename,
+                originalName: document.originalName,
+                extension: document.extension,
+                documentType: document.documentType,
+                size: document.size,
+                documentId: Number(documentResult.insertId)
+            },
+            _idempotency: { key: idempotencyKey, fingerprint }
+        };
+        const [submissionResult] = await connection.execute(
+            `INSERT INTO knowledge_submissions
+                (submission_type, submission_data, status, submitted_by)
+             VALUES ('RESOURCE', ?, 'pending', ?)`,
+            [JSON.stringify(submissionData), learnerId]
+        );
+        commitAttempted = true;
+        await connection.commit();
+        transactionOpen = false;
+        const { _idempotency: internalIdempotency, ...publicSubmissionData } = submissionData;
+        void internalIdempotency;
+        result = {
+            submission: {
+                submissionId: Number(submissionResult.insertId),
+                submissionType: 'RESOURCE',
+                submissionData: publicSubmissionData,
+                status: 'pending'
+            },
+            replayed: false,
+            processingStatus: document.processingStatus
+        };
+    } catch (error) {
+        primaryError = error;
+        if (transactionOpen && !commitAttempted) {
+            try {
+                await connection.rollback();
+                transactionOpen = false;
+            } catch {
+                connectionUsable = false;
+                try { connection.destroy(); } catch { /* Do not reuse an uncertain connection. */ }
+            }
+        }
+        if (commitAttempted) {
+            connectionUsable = false;
+            try { connection.destroy(); } catch { /* Reconcile on a fresh connection. */ }
+        }
+    } finally {
+        if (connectionUsable && lockAcquired) {
+            try {
+                const [releaseRows] = await connection.execute('SELECT RELEASE_LOCK(?) AS released', [
+                    `nl-resource:${createHash('sha256').update(`${learnerId}:${idempotencyKey}`).digest('hex').slice(0, 40)}`
+                ]);
+                if (Number(releaseRows[0]?.released) !== 1) throw new Error('Resource submission lock was not released.');
+            } catch {
+                connectionUsable = false;
+                try { connection.destroy(); } catch { /* Discard uncertain named-lock ownership. */ }
+            }
+        }
+        if (connectionUsable) {
+            try {
+                connection.release();
+            } catch {
+                try { connection.destroy(); } catch { /* A committed submission remains valid; never return this connection to the pool. */ }
+            }
+        }
+    }
+
+    if (primaryError && commitAttempted) {
+        try {
+            const existing = await findResourceSubmission(mysql, learnerId, idempotencyKey);
+            if (existing) return existingResourceResult(existing, fingerprint);
+        } catch (reconciliationError) {
+            reconciliationError.outcomeUncertain = true;
+            reconciliationError.status = 503;
+            reconciliationError.code = 'RESOURCE_SUBMISSION_STATUS_UNCONFIRMED';
+            reconciliationError.message = 'Submission status could not be confirmed. Refresh your submission history before retrying.';
+            throw reconciliationError;
+        }
+    }
+    if (primaryError) throw primaryError;
+    return result;
+}
+
 async function getLearnerSubmissions(learnerId, limit, offset) {
     const [[countRow]] = await mysql.execute(
         `SELECT COUNT(*) AS total
@@ -1275,9 +1602,14 @@ async function getLearnerSubmissions(learnerId, limit, offset) {
 module.exports = {
     ApprovalError,
     createPendingSubmission,
+    createPendingCourseSubmission,
+    createPendingResourceSubmission,
     createAdministratorPrerequisiteSubmission,
     getDatabaseConcepts,
     getDatabaseConceptOptions,
+    getApprovedCourseConceptOptions,
+    getCourseConceptOptions,
+    validateResourceCourseConcept,
     getAdminSubmission,
     getAdminSubmissions,
     getOutboxStatistics,
