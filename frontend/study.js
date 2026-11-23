@@ -1,4 +1,3 @@
-
 'use strict';
 
 const api = window.NeuroLearnApi;
@@ -10,6 +9,9 @@ let isLoadingDocuments = false;
 let isGeneratingSummary = false;
 let isSendingMessage = false;
 let isGeneratingQuiz = false;
+
+const SELECTED_COURSE_KEY = 'neurolearn.selectedCourseId';
+const requestedCourseId = new URLSearchParams(window.location.search).get('courseId');
 
 const $ = id => document.getElementById(id);
 
@@ -222,6 +224,7 @@ function selectDocument(item) {
                 selector.value = item.course_id;
             }
         }
+        localStorage.setItem(SELECTED_COURSE_KEY, item.course_id);
     }
 
     if (selectedDocumentName) {
@@ -337,6 +340,12 @@ if (searchInput) {
 function synchronizeCourseSelection(source) {
     const target = source === libraryCourseInput ? quizCourseInput : libraryCourseInput;
     if (target && target.value !== source.value) target.value = source.value;
+
+    if (source.value) {
+        localStorage.setItem(SELECTED_COURSE_KEY, source.value);
+    } else {
+        localStorage.removeItem(SELECTED_COURSE_KEY);
+    }
 }
 
 if (libraryCourseInput) {
@@ -925,28 +934,42 @@ async function generateDocumentQuiz() {
 async function loadQuizCourses() {
     const selectors = [libraryCourseInput, quizCourseInput].filter(Boolean);
     if (!selectors.length) return;
+
     const previous = new Map(selectors.map(selector => [selector, selector.value]));
+
     selectors.forEach(selector => {
         selector.disabled = false;
         selector.replaceChildren();
+
         const placeholder = document.createElement('option');
         placeholder.value = '';
         placeholder.textContent = selector === libraryCourseInput
             ? 'Select a course to browse shared materials'
             : 'Select a course';
+
         selector.appendChild(placeholder);
     });
 
     try {
         const result = await api.get('/submissions/resource-options');
+
         if (result?.success !== true || !Array.isArray(result.courses)) {
             throw new Error('Course list is unavailable.');
         }
+
         for (const course of result.courses) {
             const courseId = course?.courseId ?? course?.course_id;
             const courseName = course?.name;
-            if (typeof courseId !== 'string' || !courseId.trim() ||
-                typeof courseName !== 'string' || !courseName.trim()) continue;
+
+            if (
+                typeof courseId !== 'string' ||
+                !courseId.trim() ||
+                typeof courseName !== 'string' ||
+                !courseName.trim()
+            ) {
+                continue;
+            }
+
             selectors.forEach(selector => {
                 const option = document.createElement('option');
                 option.value = courseId;
@@ -954,19 +977,55 @@ async function loadQuizCourses() {
                 selector.appendChild(option);
             });
         }
+
         if (selectors[0].options.length === 1) {
-            selectors.forEach(selector => { selector.options[0].textContent = 'No courses available'; });
+            selectors.forEach(selector => {
+                selector.options[0].textContent = 'No courses available';
+            });
+
             setDocumentStatus('No courses are available for quiz generation. Try again later.');
         }
+
+        const savedCourseId = localStorage.getItem(SELECTED_COURSE_KEY);
+
+        const preferredCourseId = requestedCourseId ||
+            savedCourseId ||
+            previous.get(libraryCourseInput) ||
+            previous.get(quizCourseInput) ||
+            '';
+
+        const preferredExists = preferredCourseId &&
+            [...selectors[0].options].some(
+                option => option.value === preferredCourseId
+            );
+
+        const selectedCourseId = preferredExists
+            ? preferredCourseId
+            : (selectors[0].options[1]?.value || '');
+
         selectors.forEach(selector => {
-            const value = previous.get(selector);
-            if (value && [...selector.options].some(option => option.value === value)) selector.value = value;
+            if (
+                [...selector.options].some(
+                    option => option.value === selectedCourseId
+                )
+            ) {
+                selector.value = selectedCourseId;
+            }
         });
-    } catch {
+
+        if (selectedCourseId) {
+            localStorage.setItem(SELECTED_COURSE_KEY, selectedCourseId);
+        } else {
+            localStorage.removeItem(SELECTED_COURSE_KEY);
+        }
+    } catch (error) {
+        console.error('Course loading failed:', error);
+
         selectors.forEach(selector => {
             selector.options[0].textContent = 'Courses could not be loaded';
             selector.disabled = true;
         });
+
         setDocumentStatus('Courses could not be loaded. Refresh the study workspace and try again.');
     }
 }

@@ -11,6 +11,7 @@ const mysql = require('../config/mysql');
 const authenticateToken = require('../middleware/authenticateToken');
 const quizAttemptService = require('../services/quizAttemptService');
 const { getAllCourses } = require('../services/knowledgeGraphService');
+const { logSafeError } = require('../utils/safeErrorLogger');
 
 const router = express.Router();
 
@@ -36,12 +37,20 @@ const processedFolder = path.join(projectRoot, 'storage', 'processed');
 // Check whether Gemini is configured.
 function requireAI() {
     if (!ai) {
-        const error = new Error(
-            'Gemini is not configured. Check GEMINI_API_KEY in backend/.env.'
-        );
+        const error = new Error('AI-powered features are not configured. Contact an administrator.');
         error.status = 503;
+        error.code = 'AI_NOT_CONFIGURED';
+        error.expose = true;
         throw error;
     }
+}
+
+function publicAIError(status, message, code) {
+    const error = new Error(message);
+    error.status = status;
+    error.code = code;
+    error.expose = true;
+    return error;
 }
 
 // Retry temporary Gemini service-unavailable errors only.
@@ -59,7 +68,13 @@ async function generateContentWithRetry(request, maxRetries = 2) {
                 error.code === 'UNAVAILABLE';
 
             if (!isTemporaryUnavailable || attempt >= maxRetries) {
-                throw error;
+                const providerError = new Error('The AI provider request failed.');
+                providerError.name = 'AIProviderError';
+                providerError.code = 'AI_PROVIDER_ERROR';
+                providerError.status = Number.isInteger(status) ? status : undefined;
+                providerError.providerError = true;
+                providerError.cause = error;
+                throw providerError;
             }
 
             const delayMs = 1500 * (attempt + 1);
@@ -79,9 +94,7 @@ function getSafeTextPath(filename) {
     const candidate = path.resolve(processedFolder, safeName);
 
     if (path.dirname(candidate) !== processedFolder) {
-        const error = new Error('Invalid processed document path.');
-        error.status = 400;
-        throw error;
+        throw publicAIError(400, 'Invalid document path.', 'INVALID_DOCUMENT_PATH');
     }
 
     return candidate;
@@ -91,9 +104,7 @@ function getSafeTextPath(filename) {
 // resource associated with the selected canonical course.
 async function getProcessedText(documentId, learnerId, courseId = null, conceptId = null) {
     if (!Number.isInteger(documentId) || documentId < 1) {
-        const error = new Error('A valid document ID is required.');
-        error.status = 400;
-        throw error;
+        throw publicAIError(400, 'A valid document ID is required.', 'INVALID_DOCUMENT_ID');
     }
 
     const sharedAccess = typeof courseId === 'string' && courseId.trim();
@@ -137,11 +148,7 @@ async function getProcessedText(documentId, learnerId, courseId = null, conceptI
     );
 
     if (!rows.length) {
-        const error = new Error(
-            'Document not found or you do not have permission to access it.'
-        );
-        error.status = 404;
-        throw error;
+        throw publicAIError(404, 'Document not found or you do not have permission to access it.', 'DOCUMENT_UNAVAILABLE');
     }
 
     const document = rows[0];
@@ -153,19 +160,11 @@ async function getProcessedText(documentId, learnerId, courseId = null, conceptI
     });
 
     if (String(document.processing_status).toLowerCase() !== 'processed') {
-        const error = new Error(
-            `Document processing status is "${document.processing_status}", not "processed". Please upload or process the document again.`
-        );
-        error.status = 409;
-        throw error;
+        throw publicAIError(409, 'This document has not been processed yet. Please process it before using AI features.', 'DOCUMENT_NOT_PROCESSED');
     }
 
     if (!document.file_path && !document.filename) {
-        const error = new Error(
-            'The document has no stored file path or filename.'
-        );
-        error.status = 422;
-        throw error;
+        throw publicAIError(422, 'This document has no available processed content.', 'DOCUMENT_CONTENT_UNAVAILABLE');
     }
 
     /*
@@ -256,17 +255,11 @@ async function getProcessedText(documentId, learnerId, courseId = null, conceptI
             candidateCount: uniqueNames.length
         });
 
-        const error = new Error('Processed text is unavailable for this document.');
-        error.status = 404;
-        throw error;
+        throw publicAIError(404, 'Processed text is unavailable for this document.', 'PROCESSED_TEXT_UNAVAILABLE');
     }
 
     if (text.length > 30000) {
-        const error = new Error(
-            'This document exceeds the current AI processing limit of 30,000 characters.'
-        );
-        error.status = 413;
-        throw error;
+        throw publicAIError(413, 'This document exceeds the current AI processing limit of 30,000 characters.', 'DOCUMENT_TEXT_TOO_LARGE');
     }
 
     console.log('[NeuroLearn] Extracted text loaded:', {
@@ -279,12 +272,13 @@ async function getProcessedText(documentId, learnerId, courseId = null, conceptI
 
 // Handle AI errors.
 function handleAIError(res, error, action) {
-    console.error(`[NeuroLearn] ${action} failed:`, error);
-
-    return res.status(error.status || 502).json({
-        error: error.status
-            ? error.message
-            : `Gemini could not ${action.toLowerCase()}. Check the backend terminal for details.`
+    logSafeError(console, `[NeuroLearn] ${action} failed`, error);
+    if ((error?.expose === true || (error?.status && error.providerError !== true)) && Number.isInteger(error.status)) {
+        return res.status(error.status).json({ error: error.message, code: error.code });
+    }
+    return res.status(502).json({
+        error: `The AI service could not ${action.toLowerCase()}. Please try again later.`,
+        code: 'AI_PROVIDER_UNAVAILABLE'
     });
 }
 
@@ -629,10 +623,7 @@ router.post('/quiz', authenticateToken, async (req, res) => {
                 !Number.isInteger(conceptId) ||
                 !validConceptIds.has(conceptId)
             ) {
-                const error = new Error('The generated quiz did not match the selected course. Please try again.');
-                error.status = 502;
-                error.code = 'INVALID_GENERATED_QUIZ';
-                throw error;
+                throw publicAIError(502, 'The generated quiz did not match the selected course. Please try again.', 'INVALID_GENERATED_QUIZ');
             }
 
             const concept = conceptList.find(
@@ -701,7 +692,7 @@ router.post(
             if (error.status) {
                 return res.status(error.status).json({ error: error.message, code: error.code });
             }
-            console.error('[NeuroLearn] Quiz submission failed:', error);
+            logSafeError(console, '[NeuroLearn] Quiz submission failed', error);
             return res.status(500).json({ error: 'Could not save quiz results.' });
         }
     }

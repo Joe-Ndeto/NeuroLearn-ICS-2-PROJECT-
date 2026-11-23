@@ -3,7 +3,6 @@
 const { calculateMastery } = require('./masteryCalculator');
 const { rankRecommendations } = require('./recommendationRanker');
 
-const DOMAIN_COURSE_NAME = 'database concepts';
 const COURSE_ID_PATTERN = /^COURSE-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 class RecommendationServiceError extends Error {
@@ -359,7 +358,7 @@ function createRecommendationService({
             const relevantConceptIds = new Set();
             const relevantPrerequisiteRowIds = new Set();
             for (const candidate of candidates) {
-                relevantConceptIds.add(candidate.conceptId);
+                                relevantConceptIds.add(candidate.conceptId);
                 const closure = getCanonicalClosure(candidate.conceptId, incoming);
                 canonicalClosures.set(candidate.conceptId, closure.ancestors);
                 for (const conceptId of closure.ancestors) relevantConceptIds.add(conceptId);
@@ -512,8 +511,12 @@ function createRecommendationService({
             );
         }
         if (!graph || graph.courseId !== courseId || typeof graph.courseName !== 'string' ||
-            graph.courseName.trim().toLowerCase() !== DOMAIN_COURSE_NAME) {
-            throw new RecommendationServiceError('UNSUPPORTED_RECOMMENDATION_COURSE', 'Recommendations are currently available only for Database Concepts.', 422);
+            !graph.courseName.trim()) {
+            throw new RecommendationServiceError(
+                'COURSE_GRAPH_MISMATCH',
+                'The selected course does not match the requested knowledge graph course.',
+                503
+            );
         }
         if (!Array.isArray(graph.courseConceptIds) || graph.courseConceptIds.some(id => typeof id !== 'string' || !id.trim())) {
             throw new RecommendationServiceError('INVALID_COURSE_ASSOCIATION', 'Graph course associations are invalid.', 503);
@@ -535,7 +538,7 @@ function createRecommendationService({
                 throw new RecommendationServiceError('INVALID_PREREQUISITE_GRAPH', 'Prerequisite graph data is invalid.', 503);
             }
             graphClosures.set(closure.candidateGraphId, new Set(closure.prerequisiteGraphIds));
-        }
+                    }
         if (graphClosures.size !== snapshot.candidates.length) {
             throw new RecommendationServiceError('MISSING_CANDIDATE_NODE', 'A candidate concept is missing from the knowledge graph.', 503);
         }

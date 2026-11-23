@@ -9,6 +9,11 @@ const mysql = require('../config/mysql');
 const authenticateToken = require('../middleware/authenticateToken');
 const { processDocument } = require('../services/documentProcessingService');
 const { getAllCourses } = require('../services/knowledgeGraphService');
+const {
+    validateDocument,
+    removeUploadedFile,
+    isSupportedDocumentExtension
+} = require('../middleware/resourceDocumentUpload');
 
 const router = express.Router();
 
@@ -40,15 +45,12 @@ const upload = multer({
     },
 
     fileFilter: (req, file, cb) => {
-        const allowedTypes = ['.pdf', '.docx', '.pptx'];
         const extension = path.extname(file.originalname).toLowerCase();
 
-        if (allowedTypes.includes(extension)) {
+        if (isSupportedDocumentExtension(extension)) {
             cb(null, true);
         } else {
-            cb(new Error(
-                'Only PDF, DOCX and PPTX files are supported.'
-            ));
+            cb(new Error('Only PDF, DOCX and PPTX files can be processed.'));
         }
     }
 });
@@ -209,6 +211,15 @@ router.post(
         if (!req.file) {
             return res.status(400).json({
                 message: 'Please select a document to upload.'
+            });
+        }
+
+        try {
+            await validateDocument(req.file);
+        } catch (error) {
+            await removeUploadedFile(req.file).catch(() => {});
+            return res.status(400).json({
+                message: error.message || 'The file is not a valid PDF, DOCX or PPTX document.'
             });
         }
 

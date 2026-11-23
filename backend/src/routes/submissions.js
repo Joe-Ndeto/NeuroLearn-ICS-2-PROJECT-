@@ -242,7 +242,7 @@ router.post('/resources', (req, res, next) => {
     if (title === null) { await removeUploadedFile(req.file); return; }
 
     const extension = path.extname(req.file.originalname).toLowerCase();
-    const documentType = ['.ppt', '.pptx'].includes(extension) ? 'PowerPoint' : ['.doc', '.docx'].includes(extension) ? 'Word' : 'PDF';
+    const documentType = extension === '.pptx' ? 'PowerPoint' : extension === '.docx' ? 'Word' : 'PDF';
 
     let processingStatus = 'failed';
     if (['.pdf', '.docx', '.pptx'].includes(extension)) {

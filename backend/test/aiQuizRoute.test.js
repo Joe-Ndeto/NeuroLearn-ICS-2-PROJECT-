@@ -14,6 +14,7 @@ test('quiz routes persist generated attempts before responding and delegate repl
     let failCreate = false;
     let documentMatchesConcept = true;
     let processedTextMatchesConcept = true;
+    let failGeneration = false;
     const processedTextCalls = [];
     let generatedQuestions = [
         { question: 'Q1', options: ['A', 'B', 'C', 'D'], correctAnswer: 'A', explanation: 'A is right', conceptId: 11 },
@@ -47,6 +48,12 @@ test('quiz routes persist generated attempts before responding and delegate repl
     class FakeGoogleGenAI {
         constructor() {
             this.models = { generateContent: async request => {
+                if (failGeneration) {
+                    const error = new Error('GEMINI_SECRET_SENTINEL PRIVATE_LECTURE_SENTINEL');
+                    error.status = 429;
+                    error.code = 'RESOURCE_EXHAUSTED';
+                    throw error;
+                }
                 captured.prompt = request.contents;
                 return { text: JSON.stringify({ questions: generatedQuestions }) };
             } };
@@ -150,6 +157,25 @@ test('quiz routes persist generated attempts before responding and delegate repl
         });
         assert.equal(wrongConceptSummary.status, 404);
         processedTextMatchesConcept = true;
+
+        failGeneration = true;
+        const loggedErrors = [];
+        const originalConsoleError = console.error;
+        console.error = (...args) => loggedErrors.push(args);
+        let providerFailure;
+        try {
+            providerFailure = await fetch(`${base}/summarize`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ documentId: 21, courseId, conceptId: 11 })
+            });
+        } finally {
+            console.error = originalConsoleError;
+            failGeneration = false;
+        }
+        assert.equal(providerFailure.status, 502);
+        const providerFailureBody = await providerFailure.text();
+        assert.doesNotMatch(providerFailureBody, /GEMINI_SECRET_SENTINEL|PRIVATE_LECTURE_SENTINEL/);
+        assert.doesNotMatch(JSON.stringify(loggedErrors), /GEMINI_SECRET_SENTINEL|PRIVATE_LECTURE_SENTINEL/);
 
         failCreate = true;
         const notPersisted = await fetch(`${base}/quiz`, {

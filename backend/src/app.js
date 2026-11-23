@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
+const { createCorsOptions } = require('./config/corsOptions');
 const healthRoute = require('./routes/health');
 const uploadRoute = require('./routes/upload');
 const authRoute = require('./routes/auth');
@@ -14,7 +15,7 @@ const learnerProgressRoute = require('./routes/learnerProgress');
 
 const app = express();
 
-app.use(cors());
+app.use(cors(createCorsOptions()));
 app.use(express.json());
 app.use('/health', healthRoute);
 app.use('/api/upload', uploadRoute);

@@ -50,14 +50,14 @@
         const title = requiredText(fields.title, 'Resource title', 255);
         const courseId = requiredText(fields.courseId, 'Approved course', 100);
         const conceptId = requiredText(fields.conceptId, 'Approved concept', 100);
-        if (!fields.file || !fields.file.name) throw new SubmissionValidationError('Choose a PDF, PowerPoint or Word document.');
+        if (!fields.file || !fields.file.name) throw new SubmissionValidationError('Choose a PDF, DOCX or PPTX document.');
         if (!isResourceSubmissionReady(title, fields.file)) {
-            throw new SubmissionValidationError('Choose a PDF, PowerPoint or Word document.');
+            throw new SubmissionValidationError('Choose a PDF, DOCX or PPTX document.');
         }
         return { title, courseId, conceptId, type: 'document', file: fields.file };
     }
 
-    const RESOURCE_FILE_EXTENSIONS = new Set(['.pdf', '.ppt', '.pptx', '.doc', '.docx']);
+    const RESOURCE_FILE_EXTENSIONS = new Set(['.pdf', '.pptx', '.docx']);
 
     function isResourceSubmissionReady(title, file) {
         if (typeof title !== 'string' || !title.trim() || title.trim().length > 255 || !file || typeof file.name !== 'string') {

@@ -8,6 +8,7 @@ const path = require('node:path');
 const Module = require('node:module');
 const express = require('express');
 const { uploadFolder } = require('../src/middleware/resourceDocumentUpload');
+const { makeOpenXmlParts, makeZip } = require('./helpers/openXmlFixture');
 
 test('resource multipart route validates, authorizes, stores and cleans submitted files', async t => {
     const originalLoad = Module._load;
@@ -76,7 +77,10 @@ test('resource multipart route validates, authorizes, stores and cleans submitte
         const conceptBase = base.replace('/resources', '/concepts');
         const courseBase = base.replace('/resources', '/courses');
         const pdf = Buffer.from('%PDF-1.7 valid test body');
-        const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]);
+        const officePackages = {
+            'slides.pptx': makeZip(makeOpenXmlParts('pptx')),
+            'notes.docx': makeZip(makeOpenXmlParts('docx'))
+        };
         const ole = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
         const before = new Set(await fs.readdir(uploadFolder));
 
@@ -126,25 +130,26 @@ test('resource multipart route validates, authorizes, stores and cleans submitte
             return fetch(base, { method: 'POST', headers, body });
         }
 
-        for (const [filename, bytes] of [['file.pdf', pdf], ['slides.pptx', zip], ['slides.ppt', ole], ['notes.docx', zip], ['notes.doc', ole]]) {
+        for (const [filename, bytes] of [['file.pdf', pdf], ...Object.entries(officePackages)]) {
             const response = await send({ filename, bytes });
             assert.equal(response.status, 201, filename);
             const payload = await response.json();
             assert.equal(payload.submission.submissionData.document.originalName, filename);
             assert.ok(payload.submission.submissionData.document.documentId > 0);
-            if (['.doc', '.ppt'].includes(path.extname(filename))) {
-                assert.equal(payload.processingStatus, 'failed');
-                assert.match(payload.message, /will not be available in the Study Workspace/);
-            } else {
-                assert.equal(payload.processingStatus, 'processed');
-                assert.match(payload.message, /submitted for administrator review/i);
-            }
+            assert.equal(payload.processingStatus, 'processed');
+            assert.match(payload.message, /submitted for administrator review/i);
             assert.equal(payload.submission.submissionData.conceptId, 11);
             assert.equal(payload.submission.submissionData.courseId, 'COURSE-1');
             await fs.rm(path.join(uploadFolder, payload.submission.submissionData.document.filename), { force: true });
         }
 
         assert.equal((await send({ filename: 'script.exe' })).status, 400);
+        for (const filename of ['fake.docx', 'fake.pptx']) {
+            const genericZip = makeZip({ 'readme.txt': Buffer.from('not an Office document') });
+            assert.equal((await send({ filename, bytes: genericZip })).status, 400);
+        }
+        assert.equal((await send({ filename: 'legacy.doc', bytes: ole })).status, 400);
+        assert.equal((await send({ filename: 'legacy.ppt', bytes: ole })).status, 400);
         assert.equal((await send({ includeKey: false })).status, 400);
         assert.equal((await send({ filename: 'fake.pdf', bytes: Buffer.from('not PDF') })).status, 400);
         assert.equal((await send({ includeFile: false })).status, 400);

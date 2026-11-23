@@ -357,7 +357,7 @@ test('fails closed when MySQL and Neo4j prerequisite closures differ', async t =
     });
 });
 
-test('fails closed for course association mismatch, missing graph nodes, and unsupported course', async t => {
+test('fails closed for course association mismatch and missing graph nodes, while supporting other approved courses', async t => {
     await t.test('graph course association differs', async () => {
         const graphSnapshot = baseGraphSnapshot();
         graphSnapshot.courseConceptIds.pop();
@@ -372,12 +372,12 @@ test('fails closed for course association mismatch, missing graph nodes, and uns
         await assert.rejects(service.getRecommendationsForLearner({ learnerId: 7, courseId: COURSE_ID }), error =>
             error.code === 'MISSING_CANDIDATE_NODE');
     });
-    await t.test('course name is not the supported Database Concepts course', async () => {
+    await t.test('a different approved course name is accepted', async () => {
         const graphSnapshot = baseGraphSnapshot();
-        graphSnapshot.courseName = 'Unrelated Course';
+        graphSnapshot.courseName = 'Embedded Systems and Internet of Things';
         const { service } = serviceHarness({ graphSnapshot });
-        await assert.rejects(service.getRecommendationsForLearner({ learnerId: 7, courseId: COURSE_ID }), error =>
-            error.code === 'UNSUPPORTED_RECOMMENDATION_COURSE');
+        const result = await service.getRecommendationsForLearner({ learnerId: 7, courseId: COURSE_ID });
+        assert.ok(Array.isArray(result));
     });
 });
 

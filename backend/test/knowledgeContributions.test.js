@@ -112,9 +112,12 @@ test('resource validation requires title, approved course, approved concept, and
     assert.throws(() => validateResourcePayload({ courseId: 'COURSE-1', conceptId: '11', title: 'x'.repeat(256), file }), /255 characters/);
 });
 
-test('resource readiness requires a valid title and one of the supported document extensions', () => {
-    for (const name of ['resource.pdf', 'slides.PPT', 'slides.pptx', 'notes.DOC', 'notes.docx']) {
+test('resource readiness requires a valid title and a processor-supported document extension', () => {
+    for (const name of ['resource.pdf', 'slides.pptx', 'notes.docx']) {
         assert.equal(isResourceSubmissionReady(' Resource ', { name }), true, name);
+    }
+    for (const name of ['slides.PPT', 'notes.DOC', 'resource.exe']) {
+        assert.equal(isResourceSubmissionReady('Resource', { name }), false, name);
     }
     assert.equal(isResourceSubmissionReady('', { name: 'notes.pdf' }), false);
     assert.equal(isResourceSubmissionReady('x'.repeat(256), { name: 'notes.pdf' }), false);

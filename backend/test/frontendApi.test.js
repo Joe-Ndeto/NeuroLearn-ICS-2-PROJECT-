@@ -109,6 +109,25 @@ test('uses the local API base default', () => {
     assert.equal(api.apiBaseUrl, 'http://localhost:5000/api');
 });
 
+test('defaults deployed frontends to their same-origin API', async () => {
+    let requestedUrl;
+    const { api } = createRuntime({
+        location: {
+            origin: 'https://learn.example',
+            hostname: 'learn.example',
+            protocol: 'https:',
+            replace() {}
+        },
+        fetchImpl: async url => {
+            requestedUrl = url;
+            return response(200, { ok: true });
+        }
+    });
+    assert.equal(api.apiBaseUrl, 'https://learn.example/api');
+    await api.get('/health');
+    assert.equal(requestedUrl, 'https://learn.example/api/health');
+});
+
 test('uses a safe fallback for non-JSON HTTP error responses', async () => {
     const { api } = createRuntime({
         fetchImpl: async () => response(502, '<html>temporary gateway failure</html>', 'text/html')
