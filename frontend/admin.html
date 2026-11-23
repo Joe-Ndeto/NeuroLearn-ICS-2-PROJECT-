@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Administrator Dashboard - NeuroLearn</title>
+    <link rel="stylesheet" href="dashboard.css">
+    <link rel="stylesheet" href="loading-spinner.css">
+</head>
+<body>
+    <p class="page-session-message nl-loading-indicator" id="admin-session-message" role="status" aria-label="Loading" aria-busy="true">
+        <span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading</span>
+    </p>
+    <div id="admin-dashboard-content" hidden>
+        <header>
+            <div class="logo-area">
+                <div class="logo-icon">ðŸ§ </div>
+                <span>NeuroLearn</span>
+            </div>
+            <div class="nav-links">
+                <a href="admin.html" class="active">Administrator</a>
+                <a href="index.html">Home</a>
+            </div>
+            <div class="user-profile">
+                <span id="administrator-name">Administrator</span>
+                <button class="btn-logout" id="admin-logout-button" type="button">Logout</button>
+            </div>
+        </header>
+
+        <main class="main-container">
+            <div class="subheader" id="admin-page-heading">
+                <div class="ai-badge">ADMINISTRATION</div>
+                <h1>Knowledge review and synchronization</h1>
+                <p>Review student contributions and monitor their separate synchronization status.</p>
+            </div>
+
+            <section class="admin-submission-review" id="admin-course-management" aria-labelledby="admin-course-management-title">
+                <div class="section-title" id="admin-course-management-title">Manage approved courses</div>
+                <p class="section-subtitle">Only administrator-approved courses appear in the student catalogue. Course prerequisites are synchronized to the knowledge graph.</p>
+                <label for="admin-course-select">Approved course</label>
+                <select id="admin-course-select"><option value="">Select an approved course</option></select>
+                <form id="admin-course-edit-form" class="admin-course-edit-form">
+                    <label for="admin-course-title">Course title</label>
+                    <input id="admin-course-title" maxlength="200" required>
+                    <label for="admin-course-description">Description</label>
+                    <textarea id="admin-course-description" maxlength="5000" rows="3"></textarea>
+                    <label for="admin-course-difficulty">Difficulty</label>
+                    <select id="admin-course-difficulty" required>
+                        <option value="">Select difficulty</option><option>Beginner</option><option>Intermediate</option><option>Advanced</option>
+                    </select>
+                    <button class="btn-primary" id="admin-course-save" type="submit" disabled>Save course details</button>
+                </form>
+                <div class="admin-course-concepts">
+                    <h3>Concepts in this course</h3>
+                    <div id="admin-course-concept-list" aria-live="polite"></div>
+                    <label for="admin-course-concept-select">Assign an approved concept</label>
+                    <select id="admin-course-concept-select" disabled><option value="">Select an approved concept</option></select>
+                    <button class="btn-outline" id="admin-course-concept-add" type="button" disabled>Assign concept</button>
+                    <p class="section-subtitle">The administrator-selected association is saved in MySQL and queued for graph synchronization.</p>
+                </div>
+                <div class="admin-course-prerequisites">
+                    <label for="admin-course-prerequisite-select">Required course to complete first</label>
+                    <select id="admin-course-prerequisite-select"><option value="">Select an approved course</option></select>
+                    <button class="btn-outline" id="admin-course-prerequisite-add" type="button" disabled>Add prerequisite</button>
+                    <div id="admin-course-prerequisite-list"></div>
+                </div>
+                <p class="admin-review-message" id="admin-course-management-message" role="status" aria-live="polite"></p>
+            </section>
+
+            <section class="admin-submission-review" id="admin-submission-review" hidden
+                aria-labelledby="admin-submission-review-title">
+                <div id="admin-review-queue-view">
+                    <div class="section-title" id="admin-submission-review-title">Knowledge Submission Review</div>
+                    <p class="section-subtitle">
+                        Review student contributions. Approval and rejection are final; synchronization status, when present, is shown separately from review status.
+                    </p>
+                <div class="admin-review-filters">
+                    <label for="admin-review-status-filter">Review status</label>
+                    <select id="admin-review-status-filter">
+                        <option value="pending" selected>Pending</option>
+                        <option value="approved">Approved</option>
+                        <option value="rejected">Rejected</option>
+                        <option value="">All statuses</option>
+                    </select>
+                    <label for="admin-review-type-filter">Submission type</label>
+                    <select id="admin-review-type-filter">
+                        <option value="">All types</option>
+                        <option value="CONCEPT">Concept</option>
+                        <option value="RESOURCE">Learning resource</option>
+                        <option value="PREREQUISITE">Prerequisite</option>
+                        <option value="COURSE">Course</option>
+                    </select>
+                    <button class="btn-outline" id="admin-review-refresh" type="button">Refresh queue</button>
+                </div>
+                <form class="admin-review-detail" id="admin-prerequisite-form" novalidate>
+                    <h2>Manage Database Concept prerequisites</h2>
+                    <p class="admin-review-help">Choose existing approved Database Concepts. The relationship enters the review queue and uses the standard cycle checks and synchronization workflow.</p>
+                    <div id="admin-prerequisite-fields" hidden>
+                        <label for="admin-prerequisite-before">Concept to learn first</label>
+                        <select id="admin-prerequisite-before" required disabled><option value="">Select a Database Concept</option></select>
+                        <label for="admin-prerequisite-after">Concept that depends on it</label>
+                        <select id="admin-prerequisite-after" required disabled><option value="">Select a Database Concept</option></select>
+                    </div>
+                    <button class="btn-primary" id="admin-prerequisite-submit" type="submit" disabled>Send prerequisite to review queue</button>
+                    <p class="admin-review-message" id="admin-prerequisite-message" role="status" aria-live="polite"></p>
+                </form>
+                <p class="admin-review-message nl-loading-indicator" id="admin-review-loading" role="status" aria-label="Loading" aria-busy="true" hidden><span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading</span></p>
+                <p class="admin-review-message admin-review-error" id="admin-review-queue-error" role="alert" hidden></p>
+                <p class="admin-review-message" id="admin-review-queue-notice" role="status" aria-live="polite" hidden></p>
+                <p class="admin-review-message" id="admin-review-empty" role="status" hidden>No submissions match these filters.</p>
+                <div class="admin-review-queue" id="admin-review-queue" aria-live="polite"></div>
+                <nav class="admin-review-pagination" aria-label="Administrator submission pages">
+                    <button class="btn-outline" id="admin-review-previous" type="button" disabled>Previous</button>
+                    <span id="admin-review-pagination" aria-live="polite"></span>
+                    <button class="btn-outline" id="admin-review-next" type="button" disabled>Next</button>
+                </nav>
+                </div>
+                <section class="admin-review-detail" id="admin-review-detail" aria-labelledby="admin-review-detail-title" hidden>
+                    <div class="admin-review-detail-heading">
+                        <h2 id="admin-review-detail-title">Submission details</h2>
+                        <button class="btn-outline" id="admin-review-close-detail" type="button">Back to queue</button>
+                    </div>
+                    <p class="admin-review-message nl-loading-indicator" id="admin-review-detail-loading" role="status" aria-label="Loading" aria-busy="true" hidden><span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading</span></p>
+                    <p class="admin-review-message admin-review-error" id="admin-review-detail-error" role="alert" hidden></p>
+                    <div class="admin-review-detail-content" id="admin-review-detail-content"></div>
+                    <div class="admin-review-actions" id="admin-review-actions" hidden>
+                        <label for="admin-review-notes">Reviewer notes (optional)</label>
+                        <textarea id="admin-review-notes" maxlength="5000" rows="4"></textarea>
+                        <div class="admin-review-course-field" id="admin-review-difficulty-field" hidden>
+                            <label for="admin-review-difficulty">Assign concept difficulty <span aria-hidden="true">*</span></label>
+                            <select id="admin-review-difficulty" required aria-describedby="admin-review-difficulty-message">
+                                <option value="">Select a difficulty level</option>
+                                <option value="Beginner">Beginner</option>
+                                <option value="Intermediate">Intermediate</option>
+                                <option value="Advanced">Advanced</option>
+                            </select>
+                            <p class="admin-review-message" id="admin-review-difficulty-message" role="status" aria-live="polite">Choose a difficulty level before approving this concept.</p>
+                        </div>
+                        <div class="admin-review-course-field" id="admin-review-course-difficulty-field" hidden>
+                            <label for="admin-review-course-difficulty">Assign course difficulty <span aria-hidden="true">*</span></label>
+                            <select id="admin-review-course-difficulty" required>
+                                <option value="">Select difficulty</option>
+                                <option value="Beginner">Beginner</option>
+                                <option value="Intermediate">Intermediate</option>
+                                <option value="Advanced">Advanced</option>
+                            </select>
+                        </div>
+                        <div class="admin-review-course-field" id="admin-review-course-field" hidden>
+                            <label for="admin-review-courses">Associate concept with the existing Database Concepts course</label>
+                            <p class="admin-review-help">Select the existing Database Concepts course. Courses are not created here.</p>
+                            <select id="admin-review-courses" multiple size="5" aria-describedby="admin-review-courses-message"></select>
+                            <p class="admin-review-message" id="admin-review-courses-message" role="status" aria-live="polite"></p>
+                        </div>
+                        <div class="admin-review-course-field" id="admin-review-resource-concept-field" hidden>
+                            <label for="admin-review-resource-concept">Associate resource with an approved Database Concept</label>
+                            <select id="admin-review-resource-concept" required disabled aria-describedby="admin-review-resource-concept-message"></select>
+                            <p class="admin-review-message" id="admin-review-resource-concept-message" role="status" aria-live="polite"></p>
+                        </div>
+                        <div class="admin-review-action-buttons">
+                            <button class="btn-primary" id="admin-review-approve" type="button">Approve submission</button>
+                            <button class="admin-review-reject" id="admin-review-reject" type="button">Reject submission</button>
+                        </div>
+                        <p class="admin-review-message" id="admin-review-action-message" role="status" aria-live="polite"></p>
+                    </div>
+                </section>
+            </section>
+
+            <section class="admin-sync-operations" id="admin-sync-operations" hidden
+                aria-labelledby="admin-sync-operations-title">
+                <div class="admin-sync-heading">
+                    <div>
+                        <div class="section-title" id="admin-sync-operations-title">Knowledge Synchronization</div>
+                        <p class="section-subtitle">
+                            Monitor MySQL-to-Neo4j synchronization separately from submission review. Retrying a task requests synchronization again and does not change the original review decision.
+                        </p>
+                    </div>
+                    <button class="btn-outline" id="admin-sync-refresh" type="button">Refresh operations</button>
+                </div>
+                <p class="admin-sync-message nl-loading-indicator" id="admin-sync-refreshing" role="status" aria-label="Loading" aria-busy="true" hidden><span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading</span></p>
+                <div class="admin-sync-grid" id="admin-sync-stats" aria-live="polite">
+                    <div class="admin-sync-stat"><span>Pending tasks</span><strong id="sync-stat-pending">—</strong></div>
+                    <div class="admin-sync-stat"><span>Processing tasks</span><strong id="sync-stat-processing">—</strong></div>
+                    <div class="admin-sync-stat"><span>Completed tasks</span><strong id="sync-stat-completed">—</strong></div>
+                    <div class="admin-sync-stat"><span>Failed tasks</span><strong id="sync-stat-failed">—</strong></div>
+                    <div class="admin-sync-stat"><span>Expired processing</span><strong id="sync-stat-expired">—</strong></div>
+                    <div class="admin-sync-stat"><span>Outstanding tasks</span><strong id="sync-stat-outstanding">—</strong></div>
+                    <div class="admin-sync-stat"><span>Oldest pending</span><strong id="sync-stat-oldest">—</strong></div>
+                    <div class="admin-sync-stat"><span>Last successful synchronization</span><strong id="sync-stat-last-sync">—</strong></div>
+                </div>
+                <p class="admin-sync-message admin-sync-error" id="admin-sync-stats-error" role="alert" hidden></p>
+                <p class="admin-sync-last-checked" id="admin-sync-last-checked">Statistics have not been checked yet.</p>
+                <div class="admin-worker-health" aria-labelledby="admin-worker-health-title">
+                    <div>
+                        <h2 id="admin-worker-health-title">Worker health</h2>
+                        <p class="admin-worker-state" id="admin-worker-state" data-state="unknown">Unavailable</p>
+                        <p class="admin-sync-message" id="admin-worker-message" role="status" aria-live="polite">Worker health URL is not configured.</p>
+                    </div>
+                    <div class="admin-worker-times">
+                        <p>Last checked: <span id="admin-worker-last-checked">Not checked</span></p>
+                        <p>Last successful poll: <span id="admin-worker-last-poll">—</span></p>
+                    </div>
+                </div>
+                <div class="admin-failed-tasks-heading">
+                    <div>
+                        <h2>Failed synchronization tasks</h2>
+                        <p class="admin-sync-message">Only failed tasks with a valid retry target are actionable here.</p>
+                    </div>
+                </div>
+                <p class="admin-sync-message nl-loading-indicator" id="admin-failed-loading" role="status" aria-label="Loading" aria-busy="true" hidden><span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading</span></p>
+                <p class="admin-sync-message admin-sync-error" id="admin-failed-error" role="alert" hidden></p>
+                <p class="admin-sync-message" id="admin-failed-empty" role="status" hidden>No failed synchronization tasks are available.</p>
+                <div class="admin-failed-task-list" id="admin-failed-task-list" aria-live="polite"></div>
+                <nav class="admin-failed-pagination" aria-label="Failed synchronization task pages">
+                    <button class="btn-outline" id="admin-failed-previous" type="button" disabled>Previous</button>
+                    <span id="admin-failed-pagination"></span>
+                    <button class="btn-outline" id="admin-failed-next" type="button" disabled>Next</button>
+                </nav>
+                <p class="admin-sync-message" id="admin-retry-message" role="status" aria-live="polite"></p>
+            </section>
+            <div class="ai-footer">NeuroLearn Administration</div>
+        </main>
+    </div>
+
+    <script src="config.js" defer></script>
+    <script src="api.js" defer></script>
+    <script src="loading-spinner.js" defer></script>
+    <script src="role-routing.js" defer></script>
+    <script src="admin.js" defer></script>
+</body>
+</html>

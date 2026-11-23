@@ -9,6 +9,9 @@ const { GoogleGenAI } = require('@google/genai');
 
 const mysql = require('../config/mysql');
 const authenticateToken = require('../middleware/authenticateToken');
+const quizAttemptService = require('../services/quizAttemptService');
+const { getAllCourses } = require('../services/knowledgeGraphService');
+const { logSafeError } = require('../utils/safeErrorLogger');
 
 const router = express.Router();
 
@@ -25,8 +28,6 @@ if (!ai) {
     console.warn('Warning: GEMINI_API_KEY is not configured.');
 }
 
-// Store temporary quiz sessions.
-const quizSessions = new Map();
 const QUIZ_TTL_MS = 30 * 60 * 1000;
 
 // Project paths.
@@ -36,12 +37,20 @@ const processedFolder = path.join(projectRoot, 'storage', 'processed');
 // Check whether Gemini is configured.
 function requireAI() {
     if (!ai) {
-        const error = new Error(
-            'Gemini is not configured. Check GEMINI_API_KEY in backend/.env.'
-        );
+        const error = new Error('AI-powered features are not configured. Contact an administrator.');
         error.status = 503;
+        error.code = 'AI_NOT_CONFIGURED';
+        error.expose = true;
         throw error;
     }
+}
+
+function publicAIError(status, message, code) {
+    const error = new Error(message);
+    error.status = status;
+    error.code = code;
+    error.expose = true;
+    return error;
 }
 
 // Retry temporary Gemini service-unavailable errors only.
@@ -59,7 +68,13 @@ async function generateContentWithRetry(request, maxRetries = 2) {
                 error.code === 'UNAVAILABLE';
 
             if (!isTemporaryUnavailable || attempt >= maxRetries) {
-                throw error;
+                const providerError = new Error('The AI provider request failed.');
+                providerError.name = 'AIProviderError';
+                providerError.code = 'AI_PROVIDER_ERROR';
+                providerError.status = Number.isInteger(status) ? status : undefined;
+                providerError.providerError = true;
+                providerError.cause = error;
+                throw providerError;
             }
 
             const delayMs = 1500 * (attempt + 1);
@@ -79,68 +94,77 @@ function getSafeTextPath(filename) {
     const candidate = path.resolve(processedFolder, safeName);
 
     if (path.dirname(candidate) !== processedFolder) {
-        const error = new Error('Invalid processed document path.');
-        error.status = 400;
-        throw error;
+        throw publicAIError(400, 'Invalid document path.', 'INVALID_DOCUMENT_PATH');
     }
 
     return candidate;
 }
 
-// Retrieve extracted text only when the document belongs
-// to the authenticated learner.
-async function getProcessedText(documentId, learnerId) {
+// Retrieve extracted text only for its owner or a confirmed approved
+// resource associated with the selected canonical course.
+async function getProcessedText(documentId, learnerId, courseId = null, conceptId = null) {
     if (!Number.isInteger(documentId) || documentId < 1) {
-        const error = new Error('A valid document ID is required.');
-        error.status = 400;
-        throw error;
+        throw publicAIError(400, 'A valid document ID is required.', 'INVALID_DOCUMENT_ID');
     }
 
+    const sharedAccess = typeof courseId === 'string' && courseId.trim();
     const [rows] = await mysql.execute(
         `SELECT
-            document_id,
-            filename,
-            file_path,
-            processing_status
-         FROM uploaded_document
-         WHERE document_id = ?
-         AND learner_id = ?`,
-        [documentId, learnerId]
+            ud.document_id,
+            ud.filename,
+            ud.file_path,
+            ud.processing_status
+         FROM uploaded_document AS ud
+         WHERE ud.document_id = ?
+           AND (ud.learner_id = ? OR (? = 1 AND EXISTS (
+                SELECT 1
+                FROM knowledge_submissions AS s
+                INNER JOIN learning_resource AS lr
+                  ON lr.file_url = CONCAT('/api/submissions/resources/', s.submission_id, '/document')
+                INNER JOIN concept AS c ON c.concept_id = lr.concept_id
+                INNER JOIN concept_course AS cc ON cc.concept_id = c.concept_id
+                INNER JOIN course AS approved_course ON approved_course.graph_course_id = cc.course_graph_id
+                WHERE s.submission_type = 'RESOURCE'
+                  AND s.status = 'approved'
+                  AND JSON_UNQUOTE(JSON_EXTRACT(s.submission_data, '$.document.documentId')) = CAST(ud.document_id AS CHAR)
+                  AND cc.course_graph_id = ?
+                  AND (? = 0 OR lr.concept_id = ?)
+           )))
+           AND (? = 0 OR EXISTS (
+                SELECT 1
+                FROM knowledge_submissions AS scoped_submission
+                INNER JOIN learning_resource AS scoped_resource
+                  ON scoped_resource.file_url = CONCAT('/api/submissions/resources/', scoped_submission.submission_id, '/document')
+                INNER JOIN concept_course AS scoped_association ON scoped_association.concept_id = scoped_resource.concept_id
+                INNER JOIN course AS scoped_course ON scoped_course.graph_course_id = scoped_association.course_graph_id
+                WHERE scoped_submission.submission_type = 'RESOURCE'
+                  AND scoped_submission.status = 'approved'
+                  AND JSON_UNQUOTE(JSON_EXTRACT(scoped_submission.submission_data, '$.document.documentId')) = CAST(ud.document_id AS CHAR)
+                  AND scoped_association.course_graph_id = ?
+                  AND scoped_resource.concept_id = ?
+           ))`,
+        [documentId, learnerId, sharedAccess ? 1 : 0, sharedAccess ? courseId : '', Number.isSafeInteger(Number(conceptId)) && Number(conceptId) > 0 ? 1 : 0, Number(conceptId) || 0,
+            Number.isSafeInteger(Number(conceptId)) && Number(conceptId) > 0 ? 1 : 0, courseId || '', Number(conceptId) || 0]
     );
 
     if (!rows.length) {
-        const error = new Error(
-            'Document not found or you do not have permission to access it.'
-        );
-        error.status = 404;
-        throw error;
+        throw publicAIError(404, 'Document not found or you do not have permission to access it.', 'DOCUMENT_UNAVAILABLE');
     }
 
     const document = rows[0];
 
-    console.log('[NeuroLearn] Loading document:', {
+    console.log('[NeuroLearn] Loading study document:', {
         documentId: document.document_id,
-        filename: document.filename,
-        filePath: document.file_path,
         processingStatus: document.processing_status,
-        projectRoot,
-        processedFolder
+        sharedCourseRequest: Boolean(sharedAccess)
     });
 
     if (String(document.processing_status).toLowerCase() !== 'processed') {
-        const error = new Error(
-            `Document processing status is "${document.processing_status}", not "processed". Please upload or process the document again.`
-        );
-        error.status = 409;
-        throw error;
+        throw publicAIError(409, 'This document has not been processed yet. Please process it before using AI features.', 'DOCUMENT_NOT_PROCESSED');
     }
 
     if (!document.file_path && !document.filename) {
-        const error = new Error(
-            'The document has no stored file path or filename.'
-        );
-        error.status = 422;
-        throw error;
+        throw publicAIError(422, 'This document has no available processed content.', 'DOCUMENT_CONTENT_UNAVAILABLE');
     }
 
     /*
@@ -181,7 +205,6 @@ async function getProcessedText(documentId, learnerId) {
 
     let text = '';
     let matchedPath = null;
-    const missingPaths = [];
 
     for (const filename of uniqueNames) {
         const textPath = getSafeTextPath(filename);
@@ -195,7 +218,6 @@ async function getProcessedText(documentId, learnerId) {
             }
         } catch (error) {
             if (error.code === 'ENOENT') {
-                missingPaths.push(textPath);
                 continue;
             }
 
@@ -230,31 +252,18 @@ async function getProcessedText(documentId, learnerId) {
     if (!matchedPath || !text) {
         console.error('[NeuroLearn] Extracted text lookup failed:', {
             documentId,
-            originalFilename: document.filename,
-            storedFilePath: document.file_path,
-            expectedTextFiles: uniqueNames,
-            checkedPaths: missingPaths,
-            processedFolder
+            candidateCount: uniqueNames.length
         });
 
-        const error = new Error(
-            `Extracted text was not found for "${document.filename}". Expected file: ${uniqueNames.join(' or ') || 'unknown'}. Checked folder: ${processedFolder}. Check the backend terminal for details.`
-        );
-        error.status = 404;
-        throw error;
+        throw publicAIError(404, 'Processed text is unavailable for this document.', 'PROCESSED_TEXT_UNAVAILABLE');
     }
 
     if (text.length > 30000) {
-        const error = new Error(
-            'This document exceeds the current AI processing limit of 30,000 characters.'
-        );
-        error.status = 413;
-        throw error;
+        throw publicAIError(413, 'This document exceeds the current AI processing limit of 30,000 characters.', 'DOCUMENT_TEXT_TOO_LARGE');
     }
 
     console.log('[NeuroLearn] Extracted text loaded:', {
         documentId,
-        textPath: matchedPath,
         characters: text.length
     });
 
@@ -263,24 +272,14 @@ async function getProcessedText(documentId, learnerId) {
 
 // Handle AI errors.
 function handleAIError(res, error, action) {
-    console.error(`[NeuroLearn] ${action} failed:`, error);
-
-    return res.status(error.status || 502).json({
-        error: error.status
-            ? error.message
-            : `Gemini could not ${action.toLowerCase()}. Check the backend terminal for details.`
-    });
-}
-
-// Remove expired quiz sessions.
-function cleanExpiredQuizSessions() {
-    const now = Date.now();
-
-    for (const [id, session] of quizSessions) {
-        if (session.expiresAt <= now || session.submitted) {
-            quizSessions.delete(id);
-        }
+    logSafeError(console, `[NeuroLearn] ${action} failed`, error);
+    if ((error?.expose === true || (error?.status && error.providerError !== true)) && Number.isInteger(error.status)) {
+        return res.status(error.status).json({ error: error.message, code: error.code });
     }
+    return res.status(502).json({
+        error: `The AI service could not ${action.toLowerCase()}. Please try again later.`,
+        code: 'AI_PROVIDER_UNAVAILABLE'
+    });
 }
 
 // =====================================================
@@ -294,10 +293,9 @@ router.post('/summarize', authenticateToken, async (req, res) => {
 
         const documentId = Number(req.body.documentId);
 
-        const { text } = await getProcessedText(
-            documentId,
-            req.user.learner_id
-        );
+        const { text } = await getProcessedText(documentId, req.user.learner_id,
+            typeof req.body.courseId === 'string' ? req.body.courseId.trim() : null,
+            req.body.conceptId);
 
         const response = await generateContentWithRetry({
             model: MODEL,
@@ -351,7 +349,9 @@ router.post('/chat', authenticateToken, async (req, res) => {
 
         const { document, text } = await getProcessedText(
             documentId,
-            req.user.learner_id
+            req.user.learner_id,
+            typeof req.body.courseId === 'string' ? req.body.courseId.trim() : null,
+            req.body.conceptId
         );
 
         const response = await generateContentWithRetry({
@@ -398,9 +398,25 @@ router.post('/chat', authenticateToken, async (req, res) => {
 
 router.post('/quiz', authenticateToken, async (req, res) => {
     try {
-        requireAI();
-        cleanExpiredQuizSessions();
+        const courseId = typeof req.body?.courseId === 'string' ? req.body.courseId.trim() : '';
+        if (!courseId) {
+            return res.status(400).json({
+                success: false,
+                code: 'COURSE_REQUIRED',
+                message: 'Select a course before generating a quiz.'
+            });
+        }
 
+        const conceptId = Number(req.body?.conceptId);
+        if (!Number.isSafeInteger(conceptId) || conceptId < 1) {
+            return res.status(400).json({
+                success: false,
+                code: 'CONCEPT_REQUIRED',
+                message: 'Select an approved concept from the selected document before generating a quiz.'
+            });
+        }
+
+        requireAI();
         const learnerId = req.user.learner_id;
         const documentId = Number(req.body.documentId);
         const questionCount = Number(req.body.questionCount ?? 5);
@@ -415,20 +431,67 @@ router.post('/quiz', authenticateToken, async (req, res) => {
             });
         }
 
+        const availableCourses = await getAllCourses();
+        const matchingCourses = Array.isArray(availableCourses)
+            ? availableCourses.filter(course => course?.course_id === courseId)
+            : [];
+        if (matchingCourses.length !== 1) {
+            return res.status(404).json({
+                success: false,
+                code: 'COURSE_NOT_FOUND',
+                message: 'The selected course is not available.'
+            });
+        }
+
+        const [documentAssociations] = await mysql.execute(
+            `SELECT 1
+             FROM uploaded_document AS ud
+             INNER JOIN knowledge_submissions AS s
+               ON s.submission_type = 'RESOURCE' AND s.status = 'approved'
+              AND JSON_UNQUOTE(JSON_EXTRACT(s.submission_data, '$.document.documentId')) = CAST(ud.document_id AS CHAR)
+             INNER JOIN learning_resource AS lr
+               ON lr.file_url = CONCAT('/api/submissions/resources/', s.submission_id, '/document')
+             INNER JOIN concept_course AS cc ON cc.concept_id = lr.concept_id
+             INNER JOIN course AS approved_course ON approved_course.graph_course_id = cc.course_graph_id
+             WHERE ud.document_id = ? AND ud.processing_status = 'processed'
+               AND lr.concept_id = ? AND cc.course_graph_id = ?
+             LIMIT 1`, [documentId, conceptId, courseId]
+        );
+        if (!documentAssociations.length) {
+            return res.status(404).json({
+                success: false,
+                code: 'DOCUMENT_CONCEPT_UNAVAILABLE',
+                message: 'The selected document is not an approved, processed resource for that concept and course.'
+            });
+        }
+
         const { text } = await getProcessedText(
             documentId,
-            learnerId
+            learnerId,
+            courseId
         );
 
         const [concepts] = await mysql.execute(
-            `SELECT concept_id, concept_name, description
-             FROM concept
-             ORDER BY concept_id`
+            `SELECT c.concept_id, c.concept_name, c.description, c.graph_concept_id
+             FROM concept AS c
+             INNER JOIN concept_course AS cc ON cc.concept_id = c.concept_id
+             WHERE cc.course_graph_id = ? AND c.concept_id = ?
+             ORDER BY c.concept_id`,
+            [courseId, conceptId]
         );
 
         if (!concepts.length) {
             return res.status(409).json({
-                error: 'No concepts exist yet. Add concepts to the concept table before generating quizzes.'
+                success: false,
+                code: 'COURSE_HAS_NO_CONCEPTS',
+                message: 'No concepts are currently associated with this course. Ask an administrator to review its concept associations.'
+            });
+        }
+        if (concepts.some(concept => typeof concept.graph_concept_id !== 'string' || !concept.graph_concept_id.trim())) {
+            return res.status(503).json({
+                success: false,
+                code: 'COURSE_CONCEPT_MAPPING_UNAVAILABLE',
+                message: 'Course concepts could not be validated for quiz generation.'
             });
         }
 
@@ -560,9 +623,7 @@ router.post('/quiz', authenticateToken, async (req, res) => {
                 !Number.isInteger(conceptId) ||
                 !validConceptIds.has(conceptId)
             ) {
-                throw new Error(
-                    'The generated quiz contains an invalid question or concept mapping. Please generate it again.'
-                );
+                throw publicAIError(502, 'The generated quiz did not match the selected course. Please try again.', 'INVALID_GENERATED_QUIZ');
             }
 
             const concept = conceptList.find(
@@ -581,13 +642,13 @@ router.post('/quiz', authenticateToken, async (req, res) => {
 
         const quizId = crypto.randomUUID();
 
-        // Associate this quiz with the learner who generated it.
-        quizSessions.set(quizId, {
-            documentId,
+        const expiresAt = new Date(Date.now() + QUIZ_TTL_MS);
+        await quizAttemptService.createAttempt({
+            quizId,
             learnerId,
+            documentId,
             questions,
-            expiresAt: Date.now() + QUIZ_TTL_MS,
-            submitted: false
+            expiresAt
         });
 
         // Never expose correct answers before submission.
@@ -614,251 +675,25 @@ router.post(
     '/quiz/submit',
     authenticateToken,
     async (req, res) => {
-        const quizId = String(req.body.quizId || '');
-
-        // Never trust learnerId supplied by the browser.
-        const learnerId = req.user.learner_id;
-
-        const answers = req.body.answers;
-        const session = quizSessions.get(quizId);
-
-        if (!session || session.expiresAt <= Date.now()) {
-            quizSessions.delete(quizId);
-
-            return res.status(410).json({
-                error: 'This quiz has expired. Generate a new quiz and try again.'
-            });
-        }
-
-        if (session.submitted) {
-            return res.status(409).json({
-                error: 'This quiz has already been submitted.'
-            });
-        }
-
-        // Ensure the quiz belongs to the authenticated learner.
-        if (session.learnerId !== learnerId) {
-            return res.status(403).json({
-                error: 'You are not authorized to submit this quiz.'
-            });
-        }
-
-        if (
-            !Array.isArray(answers) ||
-            answers.length !== session.questions.length
-        ) {
-            return res.status(400).json({
-                error: 'Invalid quiz answers.'
-            });
-        }
-
-        if (
-            answers.some(answer =>
-                !Number.isInteger(Number(answer.questionIndex)) ||
-                Number(answer.questionIndex) < 0 ||
-                Number(answer.questionIndex) >= session.questions.length ||
-                typeof answer.selectedAnswer !== 'string'
-            )
-        ) {
-            return res.status(400).json({
-                error: 'One or more answers are invalid.'
-            });
-        }
-
-        const answerMap = new Map();
-
-        for (const answer of answers) {
-            const index = Number(answer.questionIndex);
-
-            if (answerMap.has(index)) {
-                return res.status(400).json({
-                    error: 'Duplicate answers were submitted.'
-                });
-            }
-
-            answerMap.set(index, answer.selectedAnswer);
-        }
-
-        if (answerMap.size !== session.questions.length) {
-            return res.status(400).json({
-                error: 'Please answer every question.'
-            });
-        }
-
-        const connection = await mysql.getConnection();
-        let transactionStarted = false;
-
         try {
-            const [learners] = await connection.execute(
-                'SELECT learner_id FROM learner WHERE learner_id = ?',
-                [learnerId]
-            );
-
-            if (!learners.length) {
-                return res.status(404).json({
-                    error: 'Learner not found.'
-                });
-            }
-
-            const conceptIds = [
-                ...new Set(session.questions.map(question => question.conceptId))
-            ];
-
-            const placeholders = conceptIds.map(() => '?').join(',');
-
-            const [validConcepts] = await connection.execute(
-                `SELECT concept_id
-                 FROM concept
-                 WHERE concept_id IN (${placeholders})`,
-                conceptIds
-            );
-
-            if (validConcepts.length !== conceptIds.length) {
-                return res.status(409).json({
-                    error: 'A concept in this quiz no longer exists.'
-                });
-            }
-
-            let correctCount = 0;
-            const grouped = new Map();
-
-            session.questions.forEach((question, index) => {
-                const selectedAnswer = answerMap.get(index);
-                const isCorrect = selectedAnswer === question.correctAnswer;
-
-                if (isCorrect) {
-                    correctCount++;
-                }
-
-                if (!grouped.has(question.conceptId)) {
-                    grouped.set(question.conceptId, {
-                        total: 0,
-                        correct: 0
-                    });
-                }
-
-                const group = grouped.get(question.conceptId);
-                group.total++;
-
-                if (isCorrect) {
-                    group.correct++;
-                }
+            const result = await quizAttemptService.submitAttempt({
+                quizId: req.body.quizId,
+                learnerId: req.user.learner_id,
+                answers: req.body.answers
             });
-
-            const overallScore = Number(
-                ((correctCount / session.questions.length) * 100).toFixed(2)
-            );
-
-            await connection.beginTransaction();
-            transactionStarted = true;
-
-            const [assessment] = await connection.execute(
-                `INSERT INTO assessment (learner_id, overall_score)
-                 VALUES (?, ?)`,
-                [learnerId, overallScore]
-            );
-
-            const conceptResults = [];
-
-            for (const [conceptId, group] of grouped) {
-                const score = Number(
-                    ((group.correct / group.total) * 100).toFixed(2)
-                );
-
-                await connection.execute(
-                    `INSERT INTO quiz_result
-                        (assessment_id, concept_id, score)
-                     VALUES (?, ?, ?)`,
-                    [assessment.insertId, conceptId, score]
-                );
-
-                await connection.execute(
-                    `INSERT INTO learning_path
-                        (learner_id, concept_id, mastery_level)
-                     VALUES (?, ?, ?)
-                     ON DUPLICATE KEY UPDATE
-                        mastery_level = VALUES(mastery_level)`,
-                    [learnerId, conceptId, score]
-                );
-
-                const conceptName =
-                    session.questions.find(
-                        question => question.conceptId === conceptId
-                    )?.conceptName || `Concept ${conceptId}`;
-
-                conceptResults.push({
-                    conceptId,
-                    conceptName,
-                    score,
-                    masteryLevel: score,
-                    needsRevision: score < 60
+            if (result.status === 'expired') {
+                return res.status(410).json({
+                    error: 'This quiz attempt has expired. Generate a new quiz.',
+                    code: 'QUIZ_ATTEMPT_EXPIRED'
                 });
             }
-
-            const assessedIds = [...grouped.keys()];
-            const assessedPlaceholders = assessedIds.map(() => '?').join(',');
-
-            await connection.execute(
-                `DELETE FROM recommendation
-                 WHERE learner_id = ?
-                 AND concept_id IN (${assessedPlaceholders})`,
-                [learnerId, ...assessedIds]
-            );
-
-            for (const result of conceptResults) {
-                if (result.needsRevision) {
-                    await connection.execute(
-                        `INSERT INTO recommendation (learner_id, concept_id)
-                         VALUES (?, ?)`,
-                        [learnerId, result.conceptId]
-                    );
-                }
-            }
-
-            await connection.commit();
-            transactionStarted = false;
-
-            session.submitted = true;
-            quizSessions.delete(quizId);
-
-            return res.status(201).json({
-                message: 'Quiz results saved successfully.',
-                assessmentId: assessment.insertId,
-                overallScore,
-                correctCount,
-                totalQuestions: session.questions.length,
-                conceptResults,
-                review: session.questions.map((question, index) => ({
-                    question: question.question,
-                    options: question.options,
-                    selectedAnswer: answerMap.get(index),
-                    correctAnswer: question.correctAnswer,
-                    explanation: question.explanation,
-                    isCorrect:
-                        answerMap.get(index) === question.correctAnswer,
-                    conceptId: question.conceptId,
-                    conceptName: question.conceptName
-                }))
-            });
-
+            return res.status(result.status === 'created' ? 201 : 200).json(result.response);
         } catch (error) {
-            if (transactionStarted) {
-                await connection.rollback();
+            if (error.status) {
+                return res.status(error.status).json({ error: error.message, code: error.code });
             }
-
-            console.error(
-                '[NeuroLearn] Quiz submission failed:',
-                error
-            );
-
-            return res.status(error.status || 500).json({
-                error: error.status
-                    ? error.message
-                    : 'Could not save quiz results.'
-            });
-
-        } finally {
-            connection.release();
+            logSafeError(console, '[NeuroLearn] Quiz submission failed', error);
+            return res.status(500).json({ error: 'Could not save quiz results.' });
         }
     }
 );

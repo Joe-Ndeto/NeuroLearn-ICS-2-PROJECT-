@@ -7,10 +7,7 @@ const requireAdmin = require('../middleware/requireAdmin');
 const {
     getAllCourses,
     getAllConcepts,
-    createCourse,
-    createConcept,
-    addPrerequisite,
-    addLearningResource
+    provisionCourse
 } = require('../services/knowledgeGraphService');
 
 const router = express.Router();
@@ -71,113 +68,45 @@ router.get('/concepts', async (req, res) => {
 // Only administrators can create courses.
 router.post('/courses', requireAdmin, async (req, res) => {
     if (!validateRequired(req.body, ['name'])) {
-        return res.status(400).json({
-            success: false,
-            message: 'Course name is required.'
-        });
+        return res.status(400).json({ success: false, message: 'Course name is required.' });
     }
-
     try {
-        const course = await createCourse(req.body);
-
-        res.status(201).json({
-            success: true,
-            course
-        });
+        const result = await provisionCourse(req.body);
+        return res.status(result.created ? 201 : 200).json({ success: true, created: result.created, course: result.course });
     } catch (error) {
-        console.error('[KG] Create course:', error);
-
-        res.status(500).json({
-            success: false,
-            message: 'Failed to create course.'
-        });
+        console.error('[KG] Create course:', error.code || 'course_provision_failed');
+        return res.status(500).json({ success: false, message: 'Failed to create course.' });
     }
 });
 
 // POST /api/kg/concepts
-// Only administrators can create concepts.
-router.post('/concepts', requireAdmin, async (req, res) => {
-    if (!validateRequired(req.body, ['name', 'courseId'])) {
-        return res.status(400).json({
-            success: false,
-            message: 'Concept name and course ID are required.'
-        });
-    }
-
-    try {
-        const concept = await createConcept(req.body);
-
-        res.status(201).json({
-            success: true,
-            concept
-        });
-    } catch (error) {
-        console.error('[KG] Create concept:', error);
-
-        res.status(404).json({
-            success: false,
-            message: error.message
-        });
-    }
+// Direct graph writes are disabled; concepts must use canonical review.
+router.post('/concepts', requireAdmin, (req, res) => {
+    return res.status(410).json({
+        success: false,
+        code: 'CONCEPT_SUBMISSION_REQUIRED',
+        message: 'Direct concept creation is deprecated. Submit a concept at /api/submissions/concepts, then approve it at /api/admin/submissions/:id/approve.'
+    });
 });
 
 // POST /api/kg/prerequisites
-// Only administrators can add prerequisite relationships.
-router.post('/prerequisites', requireAdmin, async (req, res) => {
-    if (!validateRequired(req.body, ['prerequisiteId', 'targetId'])) {
-        return res.status(400).json({
-            success: false,
-            message: 'Both concept IDs are required.'
-        });
-    }
-
-    try {
-        const relationship = await addPrerequisite(req.body);
-
-        res.status(201).json({
-            success: true,
-            relationship
-        });
-    } catch (error) {
-        console.error('[KG] Add prerequisite:', error);
-
-        res.status(400).json({
-            success: false,
-            message: error.message
-        });
-    }
+// Direct graph writes are disabled; prerequisites must use canonical review.
+router.post('/prerequisites', requireAdmin, (req, res) => {
+    return res.status(410).json({
+        success: false,
+        code: 'PREREQUISITE_SUBMISSION_REQUIRED',
+        message: 'Direct prerequisite creation is deprecated. Submit a prerequisite at /api/submissions/prerequisites, then approve it at /api/admin/submissions/:id/approve.'
+    });
 });
 
 // POST /api/kg/resources
-// Only administrators can add learning resources.
-router.post('/resources', requireAdmin, async (req, res) => {
-    if (!validateRequired(req.body, [
-        'conceptId',
-        'title',
-        'type',
-        'url'
-    ])) {
-        return res.status(400).json({
-            success: false,
-            message: 'Concept ID, title, type and URL are required.'
-        });
-    }
-
-    try {
-        const resource = await addLearningResource(req.body);
-
-        res.status(201).json({
-            success: true,
-            resource
-        });
-    } catch (error) {
-        console.error('[KG] Add resource:', error);
-
-        res.status(404).json({
-            success: false,
-            message: error.message
-        });
-    }
+// Direct graph writes are disabled; resources must use canonical review.
+router.post('/resources', requireAdmin, (req, res) => {
+    return res.status(410).json({
+        success: false,
+        code: 'RESOURCE_SUBMISSION_REQUIRED',
+        message: 'Direct resource creation is deprecated. Submit a learning resource at /api/submissions/resources, then approve it at /api/admin/submissions/:id/approve.'
+    });
 });
 
 module.exports = router;

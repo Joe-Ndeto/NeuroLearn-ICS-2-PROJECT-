@@ -36,8 +36,7 @@ select {
     font: inherit;
 }
 
-button,
-.upload-button {
+button {
     cursor: pointer;
 }
 
@@ -217,7 +216,6 @@ h2 {
     color: var(--muted);
 }
 
-.upload-button,
 .primary-button {
     display: block;
     width: 100%;
@@ -230,10 +228,6 @@ h2 {
     font-weight: 600;
 }
 
-.upload-button {
-    margin-top: 5px;
-}
-
 .secondary-button {
     padding: 10px 12px;
     background: white;
@@ -243,6 +237,8 @@ h2 {
 }
 
 #document-search,
+#library-course,
+#quiz-course,
 #question-count,
 #personal-notes {
     width: 100%;
@@ -266,6 +262,36 @@ h2 {
     overflow-y: auto;
     min-height: 0;
     flex: 1 1 auto;
+}
+
+.library-course-group,
+.library-group,
+.library-concept-group {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+}
+
+.library-course-group > summary,
+.library-group > summary,
+.library-concept-group > summary {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    padding: 7px 2px;
+    overflow-wrap: anywhere;
+}
+
+.library-concept-group {
+    margin-left: 9px;
+    padding-left: 9px;
+    border-left: 2px solid var(--border);
+}
+
+.document-details small {
+    color: var(--muted);
+    overflow-wrap: anywhere;
 }
 
 .document-card {

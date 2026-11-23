@@ -6,6 +6,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NeuroLearn | Study Workspace</title>
     <link rel="stylesheet" href="study.css">
+    <link rel="stylesheet" href="loading-spinner.css">
+    <script src="config.js" defer></script>
+    <script src="api.js" defer></script>
+    <script src="loading-spinner.js" defer></script>
     <script src="study.js" defer></script>
 </head>
 <body>
@@ -47,29 +51,28 @@
 
             <section class="materials-panel" id="materials">
                 <div class="panel-heading">
-                    <h2>My Study Materials</h2>
+                    <h2>Learning Library</h2>
                     <button id="refresh-documents" class="icon-button"
                         title="Refresh documents">↻</button>
                 </div>
 
-                <label for="document-file" class="upload-button">
-                    + Upload Document
-                </label>
-                <input type="file" id="document-file"
-                    accept=".pdf,.docx,.pptx" hidden>
+                <label for="library-course">Course</label>
+                <select id="library-course" aria-describedby="library-course-help">
+                    <option value="">Select a course to browse shared materials</option>
+                </select>
+                <p id="library-course-help" class="status-message">Approved shared documents are grouped by their confirmed course and concept.</p>
 
-                <button id="upload-document" class="secondary-button">
-                    Upload Selected File
-                </button>
+                <p class="status-message">Submit documents from your Dashboard. Your own uploads and approved shared materials appear here when available.</p>
 
                 <input type="search" id="document-search"
                     placeholder="Search documents...">
 
-                <p id="document-status" class="status-message"
-                    role="status">Loading your documents...</p>
+                <p id="document-status" class="status-message nl-loading-indicator" role="status" aria-label="Loading" aria-busy="true">
+                    <span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading</span>
+                </p>
 
                 <div id="document-list" class="document-list">
-                    <p class="empty-message">Loading documents...</p>
+                    <p class="empty-message nl-loading-indicator" role="status" aria-label="Loading" aria-busy="true"><span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading</span></p>
                 </div>
             </section>
 
@@ -155,6 +158,12 @@
                 <section class="tab-content" id="quiz-tab" hidden>
                     <h2>Practice Quiz</h2>
                     <p>Test your understanding of the selected material.</p>
+
+                    <label for="quiz-course">Course</label>
+                    <select id="quiz-course" required aria-describedby="quiz-course-help">
+                        <option value="">Select a course</option>
+                    </select>
+                    <p id="quiz-course-help" class="status-message">Choose the course that matches your learning material. Quiz questions use only concepts associated with that course.</p>
 
                     <label for="question-count">Number of questions</label>
                     <select id="question-count">
