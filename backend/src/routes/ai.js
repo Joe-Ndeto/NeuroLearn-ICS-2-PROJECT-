@@ -447,6 +447,41 @@ async function enforceRequestedConceptAccess(req) {
     );
 }
 
+
+ // =====================================================
+ // GET /api/ai/quiz/history
+ // =====================================================
+
+router.get('/quiz/history', authenticateToken, async (req, res) => {
+    try {
+        const history = await quizAttemptService.getHistory({
+            learnerId: req.user.learner_id
+        });
+
+        return res.json({
+            success: true,
+            history
+        });
+    } catch (error) {
+        if (error.status) {
+            return res.status(error.status).json({
+                error: error.message,
+                code: error.code
+            });
+        }
+
+        logSafeError(
+            console,
+            '[NeuroLearn] Quiz history retrieval failed',
+            error
+        );
+
+        return res.status(500).json({
+            error: 'Could not retrieve quiz history.'
+        });
+    }
+});
+
 // =====================================================
 // POST /api/ai/summarize
 // =====================================================

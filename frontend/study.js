@@ -14,6 +14,7 @@ let isGeneratingQuiz = false;
 const SELECTED_COURSE_KEY = 'neurolearn.selectedCourseId';
 const studyQuery = new URLSearchParams(window.location.search);
 const requestedCourseId = studyQuery.get('courseId');
+const requestedDocumentId = studyQuery.get('documentId');
 const requestedConceptId = studyQuery.get('conceptId');
 let studyConceptLocked = false;
 
@@ -416,7 +417,7 @@ async function loadDocuments(options = {}) {
                 String(selectedDocumentId)
         );
 
-        if (!selected && documents.length) {
+        if (!selected && documents.length && !options.selectDocumentId) {
             selected = documents.find(
                 document => document.processing_status === 'processed'
             ) || null;
@@ -1245,7 +1246,9 @@ async function initializeStudyWorkspace() {
         }
 
         await loadQuizCourses();
-        await loadDocuments();
+        await loadDocuments({
+            selectDocumentId: requestedDocumentId
+        });
     } catch (error) {
         console.error('Study workspace initialization failed:', error);
 

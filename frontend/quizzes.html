@@ -1,0 +1,146 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quizzes - NeuroLearn</title>
+
+    <link rel="stylesheet" href="dashboard.css">
+    <link rel="stylesheet" href="loading-spinner.css">
+    <link rel="stylesheet" href="quizzes.css">
+</head>
+
+<body>
+    <p class="page-session-message nl-loading-indicator"
+        id="quizzes-session-message"
+        role="status"
+        aria-label="Loading"
+        aria-busy="true">
+        <span class="nl-spinner" aria-hidden="true"></span>
+        <span class="nl-sr-only">Loading</span>
+    </p>
+
+    <header id="student-header" hidden>
+        <div class="logo-area">
+            <div class="logo-icon">NL</div>
+            <span>NeuroLearn</span>
+        </div>
+
+        <div class="nav-links">
+            <a href="dashboard.html">Dashboard</a>
+            <a href="study.html">Study</a>
+            <a href="#" class="disabled-link" aria-disabled="true">Resources</a>
+            <a href="quizzes.html" class="active" aria-current="page">Quizzes</a>
+            <a href="#" class="disabled-link" aria-disabled="true">Progress</a>
+            <a href="#" class="disabled-link" aria-disabled="true">Profile</a>
+        </div>
+
+        <div class="user-profile">
+            <img
+                src="https://via.placeholder.com/35"
+                alt="User profile"
+                class="user-avatar"
+            >
+
+            <span id="learner-name">Learner</span>
+
+            <button class="btn-logout" id="logout-button" type="button">
+                Logout
+            </button>
+        </div>
+    </header>
+
+    <main class="main-container quizzes-container"
+        id="quizzes-content"
+        hidden>
+
+        <section class="subheader">
+            <div class="ai-badge">TEST YOUR UNDERSTANDING</div>
+
+            <h1>My Quizzes</h1>
+
+            <p>
+                Explore quizzes from your approved learning materials
+                and review your previous quiz attempts.
+            </p>
+        </section>
+
+        <!-- Available Quizzes -->
+        <section class="quizzes-section"
+            aria-labelledby="available-quizzes-heading">
+
+            <div class="section-title" id="available-quizzes-heading">
+                Available Quizzes
+            </div>
+
+            <p class="section-subtitle">
+                These learning materials are approved and ready for
+                AI-powered quiz generation in the Study Workspace.
+            </p>
+
+            <div class="quizzes-toolbar">
+                <label for="quiz-course-filter">Filter by course</label>
+
+                <select id="quiz-course-filter">
+                    <option value="">All courses</option>
+                </select>
+
+                <button
+                    type="button"
+                    class="quizzes-refresh-button"
+                    id="refresh-available-quizzes">
+                    Refresh
+                </button>
+            </div>
+
+            <p id="available-quizzes-status"
+                class="quizzes-status"
+                role="status"
+                aria-live="polite">
+                Loading available learning materials...
+            </p>
+
+            <div id="available-quizzes-list"
+                class="available-quizzes-grid">
+            </div>
+        </section>
+
+        <!-- Quiz Results and History -->
+        <section class="quizzes-section"
+            aria-labelledby="quiz-history-heading">
+
+            <div class="section-title" id="quiz-history-heading">
+                Quiz Results &amp; History
+            </div>
+
+            <p class="section-subtitle">
+                Review your previous attempts, scores and answers.
+            </p>
+
+            <p id="quiz-history-status"
+                class="quizzes-status"
+                role="status"
+                aria-live="polite">
+                Loading your quiz history...
+            </p>
+
+            <div id="quiz-history-list"
+                class="quiz-history-list">
+            </div>
+        </section>
+
+        <footer class="ai-footer">
+            Powered by adaptive AI algorithms
+        </footer>
+
+    </main>
+
+    <script src="config.js" defer></script>
+    <script src="api.js" defer></script>
+    <script src="loading-spinner.js" defer></script>
+    <script src="role-routing.js" defer></script>
+    <script src="quizzes.js" defer></script>
+</body>
+
+</html>
