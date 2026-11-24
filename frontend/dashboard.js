@@ -1,3 +1,4 @@
+
 'use strict';
 
 const api = window.NeuroLearnApi;
@@ -58,6 +59,18 @@ function getReviewGapElements() {
         error: document.getElementById('review-gaps-error'),
         retry: document.getElementById('review-gaps-retry'),
         list: document.getElementById('review-gaps-list')
+    };
+}
+
+function getConceptProgressionElements() {
+    return {
+        section: document.getElementById('concept-progression'),
+        loading: document.getElementById('concept-progression-loading'),
+        empty: document.getElementById('concept-progression-empty'),
+        error: document.getElementById('concept-progression-error'),
+        retry: document.getElementById('concept-progression-retry'),
+        summary: document.getElementById('concept-progression-summary'),
+        list: document.getElementById('concept-progression-list')
     };
 }
 
@@ -529,6 +542,248 @@ async function loadReviewGaps() {
     }
 }
 
+function validProgressionMastery(value) {
+    return value === null || (
+        typeof value === 'number' &&
+        Number.isFinite(value) &&
+        value >= 0 && value <= 100
+    );
+}
+
+function renderConceptProgressionCard(concept) {
+    if (!concept ||
+        !Number.isSafeInteger(concept.conceptId) || concept.conceptId < 1 ||
+        typeof concept.conceptName !== 'string' || !concept.conceptName.trim() ||
+        typeof concept.accessible !== 'boolean' ||
+        concept.status !== (concept.accessible ? 'UNLOCKED' : 'LOCKED') ||
+        typeof concept.message !== 'string' ||
+        !validProgressionMastery(concept.mastery) ||
+        !Array.isArray(concept.prerequisites) ||
+        !(concept.reason === null || typeof concept.reason === 'string')) {
+        throw new Error('Invalid concept progression data.');
+    }
+
+    const card = document.createElement('article');
+    card.className = `concept-progression-card ${concept.accessible ? 'is-unlocked' : 'is-locked'}`;
+
+    appendRecommendationText(
+        document, card, 'h3', 'concept-progression-title', concept.conceptName
+    );
+
+    appendRecommendationText(
+        document,
+        card,
+        'span',
+        `concept-progression-status ${concept.accessible ? 'status-unlocked' : 'status-locked'}`,
+        concept.accessible ? 'Unlocked' : 'Locked'
+    );
+
+    appendRecommendationText(
+        document,
+        card,
+        'p',
+        'concept-progression-mastery',
+        concept.mastery === null
+            ? 'Current mastery: Not assessed'
+            : `Current mastery: ${concept.mastery.toFixed(2)}%`
+    );
+
+    appendRecommendationText(
+        document, card, 'p', 'concept-progression-message', concept.message
+    );
+
+    if (concept.prerequisites.length) {
+        const prerequisiteList = document.createElement('ul');
+        prerequisiteList.className = 'concept-prerequisite-list';
+
+        for (const prerequisite of concept.prerequisites) {
+            if (!prerequisite ||
+                !Number.isSafeInteger(prerequisite.conceptId) ||
+                typeof prerequisite.conceptName !== 'string' ||
+                !prerequisite.conceptName.trim() ||
+                typeof prerequisite.satisfied !== 'boolean' ||
+                !validProgressionMastery(prerequisite.mastery)) {
+                throw new Error('Invalid prerequisite details in concept progression.');
+            }
+
+            const item = document.createElement('li');
+            item.className = prerequisite.satisfied
+                ? 'prerequisite-satisfied'
+                : 'prerequisite-unmet';
+
+            const masteryText = prerequisite.mastery === null
+                ? 'Not assessed'
+                : `${prerequisite.mastery.toFixed(2)}% mastery`;
+
+            item.textContent = `${prerequisite.satisfied ? '✓' : '•'} ${prerequisite.conceptName} — ${masteryText}`;
+            prerequisiteList.appendChild(item);
+        }
+
+        card.appendChild(prerequisiteList);
+    }
+
+    if (concept.revisionTarget !== null) {
+        if (!concept.revisionTarget ||
+            !Number.isSafeInteger(concept.revisionTarget.conceptId) ||
+            typeof concept.revisionTarget.conceptName !== 'string') {
+            throw new Error('Invalid revision target in concept progression.');
+        }
+
+        appendRecommendationText(
+            document,
+            card,
+            'p',
+            'concept-revision-target',
+            `Revise first: ${concept.revisionTarget.conceptName}`
+        );
+    }
+
+    if (concept.accessible) {
+        const action = document.createElement('a');
+        action.className = 'btn-primary concept-progression-action';
+
+        const studyParams = new URLSearchParams();
+
+        if (selectedCourseId) {
+            studyParams.set('courseId', selectedCourseId);
+        }
+
+        studyParams.set('conceptId', String(concept.conceptId));
+
+        action.href = `study.html?${studyParams.toString()}`;
+        action.textContent = 'Open Study Workspace';
+        card.appendChild(action);
+    } else {
+        const lockedAction = document.createElement('button');
+        lockedAction.type = 'button';
+        lockedAction.className = 'btn-primary concept-progression-action is-disabled';
+        lockedAction.textContent = 'Locked — complete prerequisites';
+
+        // Keep the button clickable so it can explain the lock,
+        // but never give it a Study Workspace URL.
+        lockedAction.disabled = false;
+        lockedAction.setAttribute('aria-disabled', 'false');
+        lockedAction.title = 'Click to see why this concept is locked.';
+
+        lockedAction.addEventListener('click', () => {
+            const unmetPrerequisites = concept.prerequisites
+                .filter(prerequisite => prerequisite.satisfied !== true)
+                .map(prerequisite => {
+                    const mastery = prerequisite.mastery === null
+                        ? 'not assessed'
+                        : `${prerequisite.mastery.toFixed(2)}% mastery`;
+
+                    return `• ${prerequisite.conceptName} (${mastery})`;
+                });
+
+            const explanation = concept.message && concept.message.trim()
+                ? concept.message.trim()
+                : 'You must complete the required prerequisites before this concept becomes available.';
+
+            const details = unmetPrerequisites.length
+                ? `\n\nPrerequisites still outstanding:\n${unmetPrerequisites.join('\n')}`
+                : concept.revisionTarget
+                    ? `\n\nRevise ${concept.revisionTarget.conceptName} first, then check your learning progress again.`
+                    : '\n\nReturn to your learning path and complete the requirements shown for this concept.';
+
+            window.alert(
+                `${concept.conceptName} is locked.\n\n${explanation}${details}`
+            );
+        });
+
+        card.appendChild(lockedAction);
+
+        appendRecommendationText(
+            document,
+            card,
+            'p',
+            'concept-progression-hint',
+            concept.revisionTarget
+                ? `Complete the requirements for ${concept.revisionTarget.conceptName} before opening this concept.`
+                : 'Complete the listed prerequisites before opening this concept.'
+        );
+    }
+
+    return card;
+}
+
+function renderConceptProgression(response) {
+    const elements = getConceptProgressionElements();
+    if (!elements.section || !elements.list || !elements.summary) return;
+
+    const progression = response?.conceptProgression;
+    if (!progression ||
+        typeof progression.progressionThreshold !== 'number' ||
+        !Number.isFinite(progression.progressionThreshold) ||
+        progression.progressionThreshold < 0 ||
+        progression.progressionThreshold > 100 ||
+        !Array.isArray(progression.concepts)) {
+        throw new Error('Concept progression is unavailable.');
+    }
+
+    const rendered = progression.concepts.map(concept => ({
+        concept,
+        card: renderConceptProgressionCard(concept)
+    }));
+
+    const unlocked = rendered.filter(item => item.concept.accessible);
+    const locked = rendered.filter(item => !item.concept.accessible);
+
+    const group = document.createElement('section');
+    group.className = 'concept-progression-group';
+
+    appendRecommendationText(
+        document,
+        group,
+        'h3',
+        'concept-progression-group-title',
+        `Course concepts (${rendered.length})`
+    );
+
+    appendRecommendationText(
+        document,
+        group,
+        'p',
+        'concept-progression-scroll-hint',
+        'Scroll horizontally to explore all concepts in this course.'
+    );
+
+    const grid = document.createElement('div');
+    grid.className = 'concept-progression-grid';
+    grid.setAttribute('role', 'region');
+    grid.setAttribute('aria-label', 'Course concepts. Scroll horizontally to explore.');
+    grid.tabIndex = 0;
+    grid.replaceChildren(...rendered.map(item => item.card));
+    group.appendChild(grid);
+
+    const courseEligibility = response.coursePrerequisiteEligibility;
+    const coursePrerequisites = Array.isArray(courseEligibility?.prerequisites)
+        ? courseEligibility.prerequisites.filter(item => item?.satisfied === false)
+        : [];
+
+    const notices = [];
+
+    if (coursePrerequisites.length) {
+        const notice = document.createElement('p');
+        notice.className = 'concept-progression-course-notice';
+        notice.textContent = `Course prerequisites still outstanding: ${coursePrerequisites.map(item => item.title).join(', ')}.`;
+        notices.push(notice);
+    }
+
+    elements.list.replaceChildren(...notices, ...(rendered.length ? [group] : []));
+
+    elements.summary.textContent =
+        `${unlocked.length} unlocked · ${locked.length} locked · ${progression.concepts.length} total. ` +
+        `Prerequisites generally require at least ${progression.progressionThreshold}% mastery and qualifying assessment evidence.`;
+
+    if (elements.empty) {
+        elements.empty.textContent = progression.concepts.length
+            ? ''
+            : 'No concepts are currently available for this course.';
+        elements.empty.hidden = progression.concepts.length !== 0;
+    }
+}
+
 async function loadStudentRecommendations() {
     const elements = getRecommendationElements();
 
@@ -548,6 +803,19 @@ async function loadStudentRecommendations() {
     elements.retry.hidden = true;
     elements.list.replaceChildren();
 
+    const progressionElements = getConceptProgressionElements();
+
+    if (progressionElements.section) {
+        progressionElements.section.setAttribute('aria-busy', 'true');
+    }
+
+    if (progressionElements.loading) progressionElements.loading.hidden = false;
+    if (progressionElements.empty) progressionElements.empty.hidden = true;
+    if (progressionElements.error) progressionElements.error.hidden = true;
+    if (progressionElements.retry) progressionElements.retry.hidden = true;
+    if (progressionElements.list) progressionElements.list.replaceChildren();
+    if (progressionElements.summary) progressionElements.summary.textContent = '';
+
     try {
         const response = selectedCourseId
             ? await api.get(`/recommendations/me?courseId=${encodeURIComponent(selectedCourseId)}`)
@@ -565,6 +833,7 @@ async function loadStudentRecommendations() {
         }
 
         updateKnowledgeGapSummary(response.concepts);
+        renderConceptProgression(response);
 
         const coldStart = response.recommendationMode === 'cold_start';
         const prerequisiteBlocked =
@@ -617,6 +886,17 @@ async function loadStudentRecommendations() {
         elements.error.hidden = false;
         elements.retry.hidden = false;
 
+        const progressionElements = getConceptProgressionElements();
+
+        if (progressionElements.error) {
+            progressionElements.error.textContent = apiErrorMessage(
+                error, 'Concept progression could not be loaded. Please try again.'
+            );
+            progressionElements.error.hidden = false;
+        }
+
+        if (progressionElements.retry) progressionElements.retry.hidden = false;
+
         const gapCount = document.getElementById('knowledge-gaps-count');
         const gapSummary = document.getElementById('knowledge-gaps-list');
 
@@ -635,6 +915,14 @@ async function loadStudentRecommendations() {
             elements.loading.hidden = true;
             elements.loading.setAttribute('aria-busy', 'false');
             elements.section.setAttribute('aria-busy', 'false');
+
+            const progressionElements = getConceptProgressionElements();
+
+            if (progressionElements.loading) progressionElements.loading.hidden = true;
+
+            if (progressionElements.section) {
+                progressionElements.section.setAttribute('aria-busy', 'false');
+            }
         }
     }
 }
@@ -772,7 +1060,7 @@ function handleCourseChange(event) {
     if (message) {
         message.textContent = selectedCourseId
             ? 'Course selected. Updating your learning dashboard...'
-            : 'Select a course to view its progress and recommendations.';
+            : 'Select a course to view your progress and recommendations.';
     }
 
     void refreshCourseDashboard();
@@ -847,6 +1135,12 @@ async function initializeDashboard() {
     if (header) header.hidden = false;
     if (content) content.hidden = false;
 
+    const progressionRetry = document.getElementById('concept-progression-retry');
+
+    if (progressionRetry) {
+        progressionRetry.addEventListener('click', loadStudentRecommendations);
+    }
+
     const recommendationsRetry = document.getElementById('recommendations-retry');
 
     if (recommendationsRetry) {
@@ -907,6 +1201,20 @@ async function initializeDashboard() {
                 recommendationElements.empty.textContent =
                     'Select an approved course to view your recommendations.';
                 recommendationElements.empty.hidden = false;
+            }
+
+            const progressionElements = getConceptProgressionElements();
+
+            if (progressionElements.loading) progressionElements.loading.hidden = true;
+
+            if (progressionElements.section) {
+                progressionElements.section.setAttribute('aria-busy', 'false');
+            }
+
+            if (progressionElements.empty) {
+                progressionElements.empty.textContent =
+                    'Select an approved course to view its locked and unlocked concepts.';
+                progressionElements.empty.hidden = false;
             }
 
             const progressElements = getProgressElements();

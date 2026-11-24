@@ -759,6 +759,146 @@ header {
     color: var(--text-muted);
 }
 
+
+
+/* Concept progression and prerequisite learning path */
+.concept-progression {
+    margin: 0 0 32px;
+    padding: 24px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+.concept-progression-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+}
+
+.concept-progression-heading h2 {
+    margin: 0 0 8px;
+    font-size: 1.2rem;
+}
+
+.concept-progression-retry {
+    width: auto;
+    white-space: nowrap;
+}
+
+.concept-progression-group {
+    margin-top: 22px;
+}
+
+.concept-progression-group-title {
+    margin: 0 0 12px;
+    font-size: 1rem;
+}
+
+.concept-progression-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.concept-progression-card {
+    min-width: 0;
+    padding: 17px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: #fff;
+}
+
+.concept-progression-card.is-locked {
+    background: #fffdf7;
+    border-color: #f1dfb7;
+}
+
+.concept-progression-title {
+    margin: 0 0 10px;
+    font-size: 1.02rem;
+    overflow-wrap: anywhere;
+}
+
+.concept-progression-status {
+    display: inline-flex;
+    margin-bottom: 8px;
+    padding: 5px 9px;
+    border-radius: 999px;
+    font-size: 0.76rem;
+    font-weight: 700;
+}
+
+.concept-progression-status.status-unlocked {
+    color: #047857;
+    background: #ecfdf5;
+}
+
+.concept-progression-status.status-locked {
+    color: #92400e;
+    background: #fffbeb;
+}
+
+.concept-progression-mastery,
+.concept-progression-message,
+.concept-revision-target,
+.concept-progression-hint {
+    color: var(--text-muted);
+    font-size: 0.87rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.concept-progression-mastery {
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.concept-prerequisite-list {
+    margin: 10px 0;
+    padding-left: 20px;
+    color: var(--text-muted);
+    font-size: 0.84rem;
+    line-height: 1.6;
+}
+
+.prerequisite-satisfied {
+    color: #047857;
+}
+
+.prerequisite-unmet {
+    color: #b45309;
+}
+
+.concept-revision-target {
+    font-weight: 700;
+    color: #92400e;
+}
+
+.concept-progression-action {
+    display: inline-flex;
+    margin-top: 8px;
+    text-decoration: none;
+}
+
+.concept-progression-hint {
+    margin-bottom: 0;
+}
+
+.concept-progression-course-notice {
+    margin: 14px 0;
+    padding: 12px 14px;
+    border: 1px solid #f1dfb7;
+    border-radius: 10px;
+    background: var(--warning-bg);
+    color: var(--warning-text);
+    font-size: 0.88rem;
+    line-height: 1.5;
+}
+
+
 @media (max-width: 1000px) {
     .contribution-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1445,6 +1585,22 @@ header {
 }
 
 @media (max-width: 650px) {
+    .concept-progression {
+        padding: 18px;
+    }
+
+    .concept-progression-heading {
+        flex-direction: column;
+    }
+
+    .concept-progression-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .concept-progression-retry {
+        align-self: flex-start;
+    }
+
     .student-recommendations {
         padding: 18px;
     }

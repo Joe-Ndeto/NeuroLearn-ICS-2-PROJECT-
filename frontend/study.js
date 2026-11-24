@@ -1,3 +1,4 @@
+
 'use strict';
 
 const api = window.NeuroLearnApi;
@@ -11,7 +12,16 @@ let isSendingMessage = false;
 let isGeneratingQuiz = false;
 
 const SELECTED_COURSE_KEY = 'neurolearn.selectedCourseId';
-const requestedCourseId = new URLSearchParams(window.location.search).get('courseId');
+const studyQuery = new URLSearchParams(window.location.search);
+const requestedCourseId = studyQuery.get('courseId');
+const requestedConceptId = studyQuery.get('conceptId');
+let studyConceptLocked = false;
+
+const studyContent = document.querySelector('.content');
+
+if (requestedConceptId && studyContent) {
+    studyContent.hidden = true;
+}
 
 const $ = id => document.getElementById(id);
 
@@ -57,6 +67,96 @@ function setDocumentStatus(message, loading = false) {
         } else {
             documentStatus.textContent = message;
         }
+    }
+}
+
+function renderConceptAccessScreen({ title, message, unavailable = false }) {
+    const content = document.querySelector('.content');
+    if (!content) return;
+
+    studyConceptLocked = true;
+    content.hidden = false;
+    content.replaceChildren();
+
+    const panel = document.createElement('section');
+    panel.className = 'study-concept-locked-panel';
+    panel.setAttribute('role', 'status');
+
+    const icon = document.createElement('div');
+    icon.className = 'study-concept-locked-icon';
+    icon.textContent = unavailable ? '!' : '🔒';
+    icon.setAttribute('aria-hidden', 'true');
+
+    const heading = document.createElement('h1');
+    heading.textContent = title;
+
+    const description = document.createElement('p');
+    description.textContent = message;
+
+    const back = document.createElement('a');
+    back.href = 'dashboard.html';
+    back.className = 'btn-primary';
+    back.textContent = 'Return to Dashboard';
+
+    panel.append(icon, heading, description, back);
+    content.appendChild(panel);
+}
+
+async function verifyRequestedConceptAccess() {
+    if (!requestedConceptId) return true;
+
+    if (!requestedCourseId || !/^\d+$/.test(requestedConceptId)) {
+        renderConceptAccessScreen({
+            title: 'Concept access could not be verified',
+            message: 'The course or concept information in this link is invalid. Return to the Dashboard and open an available concept.',
+            unavailable: true
+        });
+        return false;
+    }
+
+    try {
+        const response = await api.get(
+            `/recommendations/me?courseId=${encodeURIComponent(requestedCourseId)}`
+        );
+
+        const concepts = response?.conceptProgression?.concepts;
+
+        if (!Array.isArray(concepts)) {
+            throw new Error('Concept progression information was not returned.');
+        }
+
+        const concept = concepts.find(item =>
+            String(item?.conceptId) === String(requestedConceptId)
+        );
+
+        if (!concept) {
+            renderConceptAccessScreen({
+                title: 'Concept unavailable',
+                message: 'This concept is not available in the selected course. Return to the Dashboard and choose an available concept.',
+                unavailable: true
+            });
+            return false;
+        }
+
+        if (concept.accessible !== true) {
+            renderConceptAccessScreen({
+                title: `${concept.conceptName || 'This concept'} is locked`,
+                message: concept.message || 'Complete the prerequisite requirements shown on your Dashboard before studying this concept.'
+            });
+            return false;
+        }
+
+        return true;
+    } catch (error) {
+        console.error('Concept access verification failed:', error);
+
+        renderConceptAccessScreen({
+            title: 'Concept access could not be verified',
+            message: 'NeuroLearn could not confirm whether this concept is unlocked. Study tools remain unavailable. Return to the Dashboard and try again.',
+            unavailable: true
+        });
+
+        return false;
     }
 }
 
@@ -156,8 +256,10 @@ function renderDocuments() {
 
         const status = document.createElement('small');
         const labels = [item.processing_status];
+
         if (item.scope === 'shared') labels.push('approved shared resource');
         else if (item.review_status) labels.push(`${item.review_status} submission`);
+
         status.textContent = labels.join(' · ');
 
         details.append(name, status);
@@ -170,52 +272,74 @@ function renderDocuments() {
 
     const shared = filtered.filter(item => item.scope === 'shared');
     const personal = filtered.filter(item => item.scope !== 'shared');
+
     const makeGroup = (title, items, expanded = true) => {
         if (!items.length) return;
+
         const details = document.createElement('details');
         details.className = 'library-group';
         details.open = expanded;
+
         const summary = document.createElement('summary');
         summary.textContent = title;
         details.appendChild(summary);
+
         items.forEach(item => details.appendChild(renderCard(item)));
         documentList.appendChild(details);
     };
 
     if (shared.length) {
         const courseName = libraryCourseInput?.selectedOptions?.[0]?.textContent || 'Selected course';
+
         const courseGroup = document.createElement('details');
         courseGroup.className = 'library-course-group';
         courseGroup.open = true;
+
         const courseSummary = document.createElement('summary');
         courseSummary.textContent = courseName;
         courseGroup.appendChild(courseSummary);
+
         const byConcept = new Map();
+
         shared.forEach(item => {
-            const conceptKey = item.concept_id == null ? 'uncategorised' : String(item.concept_id);
-            if (!byConcept.has(conceptKey)) byConcept.set(conceptKey, []);
+            const conceptKey = item.concept_id == null
+                ? 'uncategorised'
+                : String(item.concept_id);
+
+            if (!byConcept.has(conceptKey)) {
+                byConcept.set(conceptKey, []);
+            }
+
             byConcept.get(conceptKey).push(item);
         });
+
         for (const [conceptId, conceptItems] of byConcept) {
             const conceptGroup = document.createElement('details');
             conceptGroup.className = 'library-concept-group';
             conceptGroup.open = true;
+
             const conceptSummary = document.createElement('summary');
             conceptSummary.textContent = conceptId === 'uncategorised'
                 ? 'Uncategorised'
                 : conceptItems[0].concept_name || 'Concept';
+
             conceptGroup.appendChild(conceptSummary);
+
             conceptItems.forEach(item => conceptGroup.appendChild(renderCard(item)));
             courseGroup.appendChild(conceptGroup);
         }
+
         documentList.appendChild(courseGroup);
     }
+
     makeGroup('Uncategorised — my personal uploads', personal.filter(item => !item.review_status));
     makeGroup('My resource submissions', personal.filter(item => ['pending', 'rejected'].includes(item.review_status)));
     makeGroup('Approved submissions not ready for study', personal.filter(item => item.review_status === 'approved' && item.processing_status !== 'processed'));
 }
 
 function selectDocument(item) {
+    if (studyConceptLocked) return;
+
     selectedDocumentId = item.document_id;
 
     if (item.scope === 'shared' && item.course_id) {
@@ -224,6 +348,7 @@ function selectDocument(item) {
                 selector.value = item.course_id;
             }
         }
+
         localStorage.setItem(SELECTED_COURSE_KEY, item.course_id);
     }
 
@@ -261,14 +386,18 @@ function selectDocument(item) {
 }
 
 async function loadDocuments(options = {}) {
-    if (isLoadingDocuments) return;
+    if (studyConceptLocked || isLoadingDocuments) return;
+
     isLoadingDocuments = true;
     window.NeuroLearnLoading?.setButtonLoading(refreshButton, true, 'Refreshing documents');
     setDocumentStatus('', true);
 
     try {
         const selectedCourseId = libraryCourseInput?.value || '';
-        const query = selectedCourseId ? `?courseId=${encodeURIComponent(selectedCourseId)}` : '';
+        const query = selectedCourseId
+            ? `?courseId=${encodeURIComponent(selectedCourseId)}`
+            : '';
+
         const data = await api.get(`/upload/library${query}`);
 
         documents = (
@@ -288,7 +417,10 @@ async function loadDocuments(options = {}) {
         );
 
         if (!selected && documents.length) {
-            selected = documents.find(document => document.processing_status === 'processed') || null;
+            selected = documents.find(
+                document => document.processing_status === 'processed'
+            ) || null;
+
             selectedDocumentId = selected?.document_id ?? null;
         }
 
@@ -328,18 +460,28 @@ async function loadDocuments(options = {}) {
 
 if (refreshButton) {
     refreshButton.addEventListener('click', async () => {
+        if (studyConceptLocked) return;
         await loadQuizCourses();
         await loadDocuments();
     });
 }
 
 if (searchInput) {
-    searchInput.addEventListener('input', renderDocuments);
+    searchInput.addEventListener('input', () => {
+        if (!studyConceptLocked) renderDocuments();
+    });
 }
 
 function synchronizeCourseSelection(source) {
-    const target = source === libraryCourseInput ? quizCourseInput : libraryCourseInput;
-    if (target && target.value !== source.value) target.value = source.value;
+    if (studyConceptLocked) return;
+
+    const target = source === libraryCourseInput
+        ? quizCourseInput
+        : libraryCourseInput;
+
+    if (target && target.value !== source.value) {
+        target.value = source.value;
+    }
 
     if (source.value) {
         localStorage.setItem(SELECTED_COURSE_KEY, source.value);
@@ -350,18 +492,20 @@ function synchronizeCourseSelection(source) {
 
 if (libraryCourseInput) {
     libraryCourseInput.addEventListener('change', () => {
+        if (studyConceptLocked) return;
         synchronizeCourseSelection(libraryCourseInput);
         loadDocuments();
     });
 }
+
 if (quizCourseInput) {
     quizCourseInput.addEventListener('change', () => {
+        if (studyConceptLocked) return;
         synchronizeCourseSelection(quizCourseInput);
         loadDocuments();
     });
 }
 
-// Escape text before inserting formatted Markdown into HTML.
 function escapeHTML(value) {
     return String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -391,9 +535,8 @@ function formatSummary(markdown) {
         .join('\n');
 }
 
-// Generate a summary for the selected document.
 async function generateDocumentSummary() {
-    if (isGeneratingSummary) return;
+    if (studyConceptLocked || isGeneratingSummary) return;
 
     const selected = requireSelectedDocument();
     if (!selected) return;
@@ -410,7 +553,12 @@ async function generateDocumentSummary() {
     });
 
     if (summaryResult) {
-        if (window.NeuroLearnLoading?.showIndicator) window.NeuroLearnLoading.showIndicator(summaryResult, 'Generating document summary');
+        if (window.NeuroLearnLoading?.showIndicator) {
+            window.NeuroLearnLoading.showIndicator(
+                summaryResult,
+                'Generating document summary'
+            );
+        }
     }
 
     setDocumentStatus('', true);
@@ -437,8 +585,12 @@ async function generateDocumentSummary() {
 
         if (summaryResult) {
             const message = `Could not generate summary: ${error.message}`;
-            if (window.NeuroLearnLoading?.showMessage) window.NeuroLearnLoading.showMessage(summaryResult, message);
-            else summaryResult.textContent = message;
+
+            if (window.NeuroLearnLoading?.showMessage) {
+                window.NeuroLearnLoading.showMessage(summaryResult, message);
+            } else {
+                summaryResult.textContent = message;
+            }
         }
 
         setDocumentStatus(`Summary failed: ${error.message}`);
@@ -460,13 +612,9 @@ if (summaryButton) {
 }
 
 if (panelSummaryButton) {
-    panelSummaryButton.addEventListener(
-        'click',
-        generateDocumentSummary
-    );
+    panelSummaryButton.addEventListener('click', generateDocumentSummary);
 }
 
-// Add a chat message to the interface.
 function appendChatMessage(message, sender) {
     if (!chatMessages) return null;
 
@@ -485,9 +633,8 @@ function appendChatMessage(message, sender) {
     return element;
 }
 
-// Ask NeuroLearn a question about the selected document.
 async function sendChatMessage(message) {
-    if (isSendingMessage) return;
+    if (studyConceptLocked || isSendingMessage) return;
 
     const selected = requireSelectedDocument();
     if (!selected) return;
@@ -497,9 +644,7 @@ async function sendChatMessage(message) {
     if (!question) return;
 
     if (question.length > 2000) {
-        setDocumentStatus(
-            'Your question must not exceed 2,000 characters.'
-        );
+        setDocumentStatus('Your question must not exceed 2,000 characters.');
         return;
     }
 
@@ -518,7 +663,13 @@ async function sendChatMessage(message) {
 
     const loading = appendChatMessage('', 'ai');
     const loadingParagraph = loading?.querySelector('p');
-    if (loadingParagraph && window.NeuroLearnLoading?.showIndicator) window.NeuroLearnLoading.showIndicator(loadingParagraph, 'Preparing an AI answer');
+
+    if (loadingParagraph && window.NeuroLearnLoading?.showIndicator) {
+        window.NeuroLearnLoading.showIndicator(
+            loadingParagraph,
+            'Preparing an AI answer'
+        );
+    }
 
     setDocumentStatus('', true);
 
@@ -535,8 +686,11 @@ async function sendChatMessage(message) {
         }
 
         if (loading) {
-            if (window.NeuroLearnLoading?.showMessage) window.NeuroLearnLoading.showMessage(loadingParagraph, data.answer);
-            else loadingParagraph.textContent = data.answer;
+            if (window.NeuroLearnLoading?.showMessage) {
+                window.NeuroLearnLoading.showMessage(loadingParagraph, data.answer);
+            } else {
+                loadingParagraph.textContent = data.answer;
+            }
         }
 
         if (
@@ -586,8 +740,12 @@ async function sendChatMessage(message) {
 
         if (loading) {
             const message = `Sorry, I could not answer that: ${error.message}`;
-            if (window.NeuroLearnLoading?.showMessage) window.NeuroLearnLoading.showMessage(loadingParagraph, message);
-            else loadingParagraph.textContent = message;
+
+            if (window.NeuroLearnLoading?.showMessage) {
+                window.NeuroLearnLoading.showMessage(loadingParagraph, message);
+            } else {
+                loadingParagraph.textContent = message;
+            }
         }
 
         setDocumentStatus(`Chat failed: ${error.message}`);
@@ -617,7 +775,6 @@ if (chatForm) {
     });
 }
 
-// Enter sends the message; Shift + Enter inserts a new line.
 if (chatInput && chatForm) {
     chatInput.addEventListener('keydown', event => {
         if (
@@ -638,15 +795,14 @@ document
     .querySelectorAll('.suggested-prompts [data-prompt]')
     .forEach(button => {
         button.addEventListener('click', async () => {
-            if (button.dataset.prompt) {
+            if (!studyConceptLocked && button.dataset.prompt) {
                 await sendChatMessage(button.dataset.prompt);
             }
         });
     });
 
-// Display quiz questions and submit answers for server-side scoring.
 function renderQuiz(quizId, questions) {
-    if (!quizResult) return;
+    if (studyConceptLocked || !quizResult) return;
 
     quizResult.replaceChildren();
 
@@ -716,7 +872,7 @@ function renderQuiz(quizId, questions) {
     form.addEventListener('submit', async event => {
         event.preventDefault();
 
-        if (submit.disabled) return;
+        if (studyConceptLocked || submit.disabled) return;
 
         const formData = new FormData(form);
 
@@ -731,6 +887,7 @@ function renderQuiz(quizId, questions) {
 
         window.NeuroLearnLoading?.setButtonLoading(submit, true, 'Saving quiz results');
         if (!window.NeuroLearnLoading) submit.disabled = true;
+
         setDocumentStatus('', true);
 
         try {
@@ -824,6 +981,7 @@ function renderQuiz(quizId, questions) {
             form.prepend(message);
             window.NeuroLearnLoading?.setButtonLoading(submit, false);
             submit.textContent = 'Retry Saving Answers';
+
             if (!window.NeuroLearnLoading) {
                 submit.disabled = false;
             }
@@ -833,9 +991,8 @@ function renderQuiz(quizId, questions) {
     });
 }
 
-// Generate a quiz for the selected document.
 async function generateDocumentQuiz() {
-    if (isGeneratingQuiz) return;
+    if (studyConceptLocked || isGeneratingQuiz) return;
 
     const selected = requireSelectedDocument();
     if (!selected) return;
@@ -845,7 +1002,10 @@ async function generateDocumentQuiz() {
         return;
     }
 
-    const courseId = typeof selected.course_id === 'string' ? selected.course_id.trim() : '';
+    const courseId = typeof selected.course_id === 'string'
+        ? selected.course_id.trim()
+        : '';
+
     if (!courseId) {
         setDocumentStatus('Choose a course before generating a quiz.');
         quizCourseInput?.focus();
@@ -875,7 +1035,12 @@ async function generateDocumentQuiz() {
     });
 
     if (quizResult) {
-        if (window.NeuroLearnLoading?.showIndicator) window.NeuroLearnLoading.showIndicator(quizResult, 'Generating quiz questions');
+        if (window.NeuroLearnLoading?.showIndicator) {
+            window.NeuroLearnLoading.showIndicator(
+                quizResult,
+                'Generating quiz questions'
+            );
+        }
     }
 
     setDocumentStatus('', true);
@@ -1031,22 +1196,17 @@ async function loadQuizCourses() {
 }
 
 if (generateQuizButton) {
-    generateQuizButton.addEventListener(
-        'click',
-        generateDocumentQuiz
-    );
+    generateQuizButton.addEventListener('click', generateDocumentQuiz);
 }
 
 if (openQuizButton) {
-    openQuizButton.addEventListener(
-        'click',
-        generateDocumentQuiz
-    );
+    openQuizButton.addEventListener('click', generateDocumentQuiz);
 }
 
-// Switch between study tabs.
 document.querySelectorAll('.study-tab').forEach(button => {
     button.addEventListener('click', () => {
+        if (studyConceptLocked) return;
+
         const selectedTab = button.dataset.tab;
 
         document.querySelectorAll('.study-tab').forEach(tab => {
@@ -1062,7 +1222,6 @@ document.querySelectorAll('.study-tab').forEach(button => {
     });
 });
 
-// Confirm the learner identity with the backend before loading private data.
 async function initializeStudyWorkspace() {
     try {
         learner = await api.validateSession();
@@ -1072,14 +1231,32 @@ async function initializeStudyWorkspace() {
         }
 
         if (learnerName) {
-            learnerName.textContent =
-                learner.username || learner.name || 'Learner';
+            learnerName.textContent = learner.username || learner.name || 'Learner';
+        }
+
+        const accessGranted = await verifyRequestedConceptAccess();
+
+        if (!accessGranted) {
+            return;
+        }
+
+        if (studyContent) {
+            studyContent.hidden = false;
         }
 
         await loadQuizCourses();
         await loadDocuments();
     } catch (error) {
         console.error('Study workspace initialization failed:', error);
+
+        if (requestedConceptId) {
+            renderConceptAccessScreen({
+                title: 'Concept access could not be verified',
+                message: 'Your session or concept access could not be verified. Study tools remain unavailable. Return to the Dashboard and sign in again if necessary.',
+                unavailable: true
+            });
+            return;
+        }
 
         setDocumentStatus(api.hasToken()
             ? 'Could not verify your session. Check your connection and try again.'

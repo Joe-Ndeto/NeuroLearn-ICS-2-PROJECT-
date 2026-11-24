@@ -9,8 +9,18 @@ const {
     RecommendationServiceError
 } = require('../services/recommendationService');
 
+const {
+    createConceptAccessService,
+    ConceptAccessError
+} = require('../services/conceptAccessService');
+
 const router = express.Router();
+
 const recommendationService = createRecommendationService();
+
+const conceptAccessService = createConceptAccessService({
+    recommendationService
+});
 
 const COURSE_ID_PATTERN =
     /^COURSE-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -46,6 +56,34 @@ function requireStudent(req, res, next) {
 }
 
 function serviceErrorResponse(error, res) {
+    if (error instanceof ConceptAccessError) {
+        if (
+            error.code === 'INVALID_LEARNER_ID' ||
+            error.code === 'INVALID_COURSE_ID' ||
+            error.code === 'INVALID_CONCEPT_ID'
+        ) {
+            return res.status(400).json({
+                success: false,
+                code: error.code,
+                message: error.message
+            });
+        }
+
+        if (error.code === 'CONCEPT_NOT_FOUND') {
+            return res.status(404).json({
+                success: false,
+                code: error.code,
+                message: 'The requested concept is not available in the selected course.'
+            });
+        }
+
+        return res.status(503).json({
+            success: false,
+            code: 'CONCEPT_PROGRESSION_UNAVAILABLE',
+            message: 'Concept progression information could not be loaded. Please try again.'
+        });
+    }
+
     if (error instanceof RecommendationServiceError) {
         if (
             error.code === 'COURSE_NOT_FOUND' ||
@@ -101,10 +139,19 @@ router.get('/me', authenticateToken, requireStudent, async (req, res) => {
     }
 
     try {
+        const learnerId = req.user.learner_id;
+
         const recommendationResult =
             await recommendationService.getRecommendationResultForLearner({
-                learnerId: req.user.learner_id,
+                learnerId,
                 courseId
+            });
+
+        const progression =
+            await conceptAccessService.getCourseConceptAccessForLearner({
+                learnerId,
+                courseId,
+                recommendationResult
             });
 
         return res.status(200).json({
@@ -116,20 +163,15 @@ router.get('/me', authenticateToken, requireStudent, async (req, res) => {
             recommendations: recommendationResult.recommendations,
             concepts: recommendationResult.concepts,
             coursePrerequisiteEligibility:
-                recommendationResult.coursePrerequisiteEligibility
+                recommendationResult.coursePrerequisiteEligibility,
+            conceptProgression: {
+                progressionThreshold: progression.progressionThreshold,
+                concepts: progression.concepts
+            }
         });
     } catch (error) {
         logRecommendationFailure(error);
-
-        if (error instanceof RecommendationServiceError) {
-            return serviceErrorResponse(error, res);
-        }
-
-        return res.status(503).json({
-            success: false,
-            code: 'RECOMMENDATIONS_UNAVAILABLE',
-            message: 'Recommendations could not be loaded. Please try again.'
-        });
+        return serviceErrorResponse(error, res);
     }
 });
 

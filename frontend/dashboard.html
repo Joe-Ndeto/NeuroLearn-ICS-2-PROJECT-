@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 
@@ -268,6 +267,50 @@
             </div>
         </section>
 
+        <!-- Concept progression -->
+        <section
+            class="concept-progression"
+            id="concept-progression"
+            aria-labelledby="concept-progression-title"
+            aria-busy="true">
+
+            <div class="concept-progression-heading">
+                <div>
+                    <h2 id="concept-progression-title">Learning Path &amp; Concept Progression</h2>
+                    <p class="section-subtitle" id="concept-progression-summary">
+                        Your concepts are unlocked as you satisfy their prerequisites.
+                    </p>
+                </div>
+                <button
+                    class="btn-outline concept-progression-retry"
+                    id="concept-progression-retry"
+                    type="button"
+                    hidden>
+                    Retry progression
+                </button>
+            </div>
+
+            <p
+                class="recommendations-state nl-loading-indicator"
+                id="concept-progression-loading"
+                role="status"
+                aria-label="Loading concept progression"
+                aria-busy="true">
+                <span class="nl-spinner" aria-hidden="true"></span>
+                <span class="nl-sr-only">Loading concept progression</span>
+            </p>
+
+            <p id="concept-progression-empty" class="recommendations-state" role="status" hidden>
+                Select an approved course to view its learning path.
+            </p>
+
+            <p id="concept-progression-error" class="recommendations-state recommendations-error" role="alert" hidden>
+                Concept progression could not be loaded. Please try again.
+            </p>
+
+            <div id="concept-progression-list" aria-live="polite"></div>
+        </section>
+
         <!-- Personalized recommendations -->
         <section
             class="student-recommendations"
@@ -410,7 +453,7 @@
                     id="concept-submission-form"
                     novalidate>
 
-                    <h2>Suggest a Database Concept</h2>
+                    <h2>Suggest a Course Concept</h2>
 
                     <p class="contribution-help">
                         Propose a new concept for an approved course.

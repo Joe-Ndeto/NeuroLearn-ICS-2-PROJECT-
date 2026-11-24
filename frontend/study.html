@@ -49,38 +49,89 @@
 
         <main class="content">
 
+            <!-- Learning Library -->
             <section class="materials-panel" id="materials">
                 <div class="panel-heading">
                     <h2>Learning Library</h2>
-                    <button id="refresh-documents" class="icon-button"
-                        title="Refresh documents">↻</button>
+                    <button
+                        id="refresh-documents"
+                        class="icon-button"
+                        title="Refresh documents">
+                        ↻
+                    </button>
                 </div>
 
                 <label for="library-course">Course</label>
-                <select id="library-course" aria-describedby="library-course-help">
-                    <option value="">Select a course to browse shared materials</option>
+                <select
+                    id="library-course"
+                    aria-describedby="library-course-help">
+                    <option value="">
+                        Select a course to browse shared materials
+                    </option>
                 </select>
-                <p id="library-course-help" class="status-message">Approved shared documents are grouped by their confirmed course and concept.</p>
 
-                <p class="status-message">Submit documents from your Dashboard. Your own uploads and approved shared materials appear here when available.</p>
+                <p id="library-course-help" class="status-message">
+                    Approved shared documents are grouped by their
+                    confirmed course and concept.
+                </p>
 
-                <input type="search" id="document-search"
+                <!-- Concept selector -->
+                <label for="library-concept">Concept</label>
+                <select
+                    id="library-concept"
+                    aria-describedby="library-concept-help"
+                    disabled>
+                    <option value="">Select a course first</option>
+                </select>
+
+                <p id="library-concept-help" class="status-message">
+                    Choose a concept to focus the library on its approved
+                    learning materials. Your personal uploads remain
+                    available.
+                </p>
+
+                <p class="status-message">
+                    Submit documents from your Dashboard. Your own uploads
+                    and approved shared materials appear here when available.
+                </p>
+
+                <input
+                    type="search"
+                    id="document-search"
                     placeholder="Search documents...">
 
-                <p id="document-status" class="status-message nl-loading-indicator" role="status" aria-label="Loading" aria-busy="true">
-                    <span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading</span>
+                <p
+                    id="document-status"
+                    class="status-message nl-loading-indicator"
+                    role="status"
+                    aria-label="Loading"
+                    aria-busy="true">
+                    <span class="nl-spinner" aria-hidden="true"></span>
+                    <span class="nl-sr-only">Loading</span>
                 </p>
 
                 <div id="document-list" class="document-list">
-                    <p class="empty-message nl-loading-indicator" role="status" aria-label="Loading" aria-busy="true"><span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading</span></p>
+                    <p
+                        class="empty-message nl-loading-indicator"
+                        role="status"
+                        aria-label="Loading"
+                        aria-busy="true">
+                        <span class="nl-spinner" aria-hidden="true"></span>
+                        <span class="nl-sr-only">Loading</span>
+                    </p>
                 </div>
             </section>
 
+            <!-- AI Learning Chat -->
             <section class="chat-panel">
                 <div class="selected-document">
                     <div class="pdf-icon">PDF</div>
+
                     <div class="selected-info">
-                        <h2 id="selected-document-name">No document selected</h2>
+                        <h2 id="selected-document-name">
+                            No document selected
+                        </h2>
+
                         <p id="selected-document-status">
                             Choose a processed document to begin.
                         </p>
@@ -92,19 +143,29 @@
                         <h2>AI Learning Chat</h2>
                         <p>Understand your notes, one question at a time.</p>
                     </div>
-                    <button id="summary-button" class="secondary-button">
+
+                    <button
+                        id="summary-button"
+                        class="secondary-button">
                         Summarize
                     </button>
                 </div>
 
-                <div id="chat-messages" class="chat-messages"
+                <div
+                    id="chat-messages"
+                    class="chat-messages"
                     aria-live="polite">
+
                     <div class="welcome-message">
                         <div class="welcome-icon">✦</div>
+
                         <h2>What would you like to learn today?</h2>
-                        <p>Select a processed document and ask NeuroLearn
+
+                        <p>
+                            Select a processed document and ask NeuroLearn
                             to explain a concept, summarize your notes,
-                            or help you revise.</p>
+                            or help you revise.
+                        </p>
                     </div>
                 </div>
 
@@ -112,70 +173,130 @@
                     <button data-prompt="Summarize this document">
                         Summarize this document
                     </button>
+
                     <button data-prompt="Explain the key definitions">
                         Key definitions
                     </button>
+
                     <button data-prompt="Explain a difficult concept">
                         Explain a concept
                     </button>
+
                     <button id="open-quiz-button">
                         Generate quiz questions
                     </button>
                 </div>
 
                 <form id="chat-form" class="chat-form">
-                    <textarea id="chat-input"
+                    <textarea
+                        id="chat-input"
                         placeholder="Ask a question about your document..."
-                        rows="2" required></textarea>
-                    <button type="submit" id="send-button"
-                        aria-label="Send message">➤</button>
+                        rows="2"
+                        required></textarea>
+
+                    <button
+                        type="submit"
+                        id="send-button"
+                        aria-label="Send message">
+                        ➤
+                    </button>
                 </form>
+
                 <p class="privacy-note">
-                    AI-generated answers may need verification against your notes.
+                    AI-generated answers may need verification against
+                    your notes.
                 </p>
             </section>
 
+            <!-- Summary and Quiz Panel -->
             <aside class="study-panel">
                 <div class="study-tabs">
-                    <button class="study-tab active" data-tab="summary">
+                    <button
+                        class="study-tab active"
+                        data-tab="summary">
                         Summary
                     </button>
-                    <button class="study-tab" data-tab="quiz">Quiz</button>
+
+                    <button
+                        class="study-tab"
+                        data-tab="quiz">
+                        Quiz
+                    </button>
                 </div>
 
-                <section class="tab-content active" id="summary-tab">
+                <!-- Summary -->
+                <section
+                    class="tab-content active"
+                    id="summary-tab">
+
                     <h2>Document Summary</h2>
-                    <p>Generate a concise revision summary from your selected
-                        learning material.</p>
-                    <button id="panel-summary-button" class="primary-button">
+
+                    <p>
+                        Generate a concise revision summary from your
+                        selected learning material.
+                    </p>
+
+                    <button
+                        id="panel-summary-button"
+                        class="primary-button">
                         Generate Summary
                     </button>
-                    <div id="summary-result" class="result-content">
+
+                    <div
+                        id="summary-result"
+                        class="result-content">
                         Your summary will appear here.
                     </div>
                 </section>
 
-                <section class="tab-content" id="quiz-tab" hidden>
+                <!-- Quiz -->
+                <section
+                    class="tab-content"
+                    id="quiz-tab"
+                    hidden>
+
                     <h2>Practice Quiz</h2>
-                    <p>Test your understanding of the selected material.</p>
+
+                    <p>
+                        Test your understanding of the selected material.
+                    </p>
 
                     <label for="quiz-course">Course</label>
-                    <select id="quiz-course" required aria-describedby="quiz-course-help">
+
+                    <select
+                        id="quiz-course"
+                        required
+                        aria-describedby="quiz-course-help">
                         <option value="">Select a course</option>
                     </select>
-                    <p id="quiz-course-help" class="status-message">Choose the course that matches your learning material. Quiz questions use only concepts associated with that course.</p>
 
-                    <label for="question-count">Number of questions</label>
+                    <p
+                        id="quiz-course-help"
+                        class="status-message">
+                        Choose the course that matches your learning
+                        material. Quiz questions use only concepts
+                        associated with that course.
+                    </p>
+
+                    <label for="question-count">
+                        Number of questions
+                    </label>
+
                     <select id="question-count">
                         <option value="3">3 questions</option>
                         <option value="5" selected>5 questions</option>
                         <option value="10">10 questions</option>
                     </select>
 
-                    <button id="generate-quiz-button"
-                        class="primary-button">Generate Quiz</button>
+                    <button
+                        id="generate-quiz-button"
+                        class="primary-button">
+                        Generate Quiz
+                    </button>
 
-                    <div id="quiz-result" class="result-content">
+                    <div
+                        id="quiz-result"
+                        class="result-content">
                         Your quiz will appear here.
                     </div>
                 </section>

@@ -13,9 +13,15 @@ const quizAttemptService = require('../services/quizAttemptService');
 const { getAllCourses } = require('../services/knowledgeGraphService');
 const { logSafeError } = require('../utils/safeErrorLogger');
 
+const {
+    createConceptAccessService,
+    ConceptAccessError
+} = require('../services/conceptAccessService');
+
 const router = express.Router();
 
-// All NeuroLearn AI features use the same Gemini model.
+const conceptAccessService = createConceptAccessService();
+
 const MODEL = 'gemini-3.5-flash-lite';
 
 console.log('[NeuroLearn] Gemini model:', MODEL);
@@ -30,35 +36,95 @@ if (!ai) {
 
 const QUIZ_TTL_MS = 30 * 60 * 1000;
 
-// Project paths.
 const projectRoot = path.resolve(__dirname, '../../..');
 const processedFolder = path.join(projectRoot, 'storage', 'processed');
 
-// Check whether Gemini is configured.
 function requireAI() {
     if (!ai) {
-        const error = new Error('AI-powered features are not configured. Contact an administrator.');
+        const error = new Error(
+            'AI-powered features are not configured. Contact an administrator.'
+        );
+
         error.status = 503;
         error.code = 'AI_NOT_CONFIGURED';
         error.expose = true;
+
         throw error;
     }
 }
 
 function publicAIError(status, message, code) {
     const error = new Error(message);
+
     error.status = status;
     error.code = code;
     error.expose = true;
+
     return error;
 }
 
-// Retry temporary Gemini service-unavailable errors only.
-// Quota/rate-limit errors are not retried automatically.
+async function requireConceptAccess(learnerId, courseId, conceptId) {
+    try {
+        const access =
+            await conceptAccessService.getConceptAccessForLearner({
+                learnerId,
+                courseId,
+                conceptId
+            });
+
+        if (!access.accessible) {
+            throw publicAIError(
+                403,
+                access.message ||
+                    'Complete the prerequisite requirements before continuing.',
+                'CONCEPT_LOCKED'
+            );
+        }
+
+        return access;
+
+    } catch (error) {
+        if (error?.code === 'CONCEPT_LOCKED') {
+            throw error;
+        }
+
+        if (error instanceof ConceptAccessError) {
+            if (error.code === 'CONCEPT_NOT_FOUND') {
+                throw publicAIError(
+                    404,
+                    'The selected concept is not available in this course.',
+                    'CONCEPT_NOT_FOUND'
+                );
+            }
+
+            if (
+                error.code === 'INVALID_COURSE_ID' ||
+                error.code === 'INVALID_CONCEPT_ID' ||
+                error.code === 'INVALID_LEARNER_ID'
+            ) {
+                throw publicAIError(
+                    400,
+                    'The selected course or concept is invalid.',
+                    'INVALID_CONCEPT_SELECTION'
+                );
+            }
+
+            throw publicAIError(
+                503,
+                'Concept progression could not be verified. Please try again.',
+                'CONCEPT_ACCESS_UNAVAILABLE'
+            );
+        }
+
+        throw error;
+    }
+}
+
 async function generateContentWithRetry(request, maxRetries = 2) {
     for (let attempt = 0; ; attempt++) {
         try {
             return await ai.models.generateContent(request);
+
         } catch (error) {
             const status = Number(error.status || error.code);
 
@@ -68,12 +134,18 @@ async function generateContentWithRetry(request, maxRetries = 2) {
                 error.code === 'UNAVAILABLE';
 
             if (!isTemporaryUnavailable || attempt >= maxRetries) {
-                const providerError = new Error('The AI provider request failed.');
+                const providerError = new Error(
+                    'The AI provider request failed.'
+                );
+
                 providerError.name = 'AIProviderError';
                 providerError.code = 'AI_PROVIDER_ERROR';
-                providerError.status = Number.isInteger(status) ? status : undefined;
+                providerError.status = Number.isInteger(status)
+                    ? status
+                    : undefined;
                 providerError.providerError = true;
                 providerError.cause = error;
+
                 throw providerError;
             }
 
@@ -88,26 +160,38 @@ async function generateContentWithRetry(request, maxRetries = 2) {
     }
 }
 
-// Validate extracted text filenames.
 function getSafeTextPath(filename) {
     const safeName = path.basename(filename);
     const candidate = path.resolve(processedFolder, safeName);
 
     if (path.dirname(candidate) !== processedFolder) {
-        throw publicAIError(400, 'Invalid document path.', 'INVALID_DOCUMENT_PATH');
+        throw publicAIError(
+            400,
+            'Invalid document path.',
+            'INVALID_DOCUMENT_PATH'
+        );
     }
 
     return candidate;
 }
 
-// Retrieve extracted text only for its owner or a confirmed approved
-// resource associated with the selected canonical course.
-async function getProcessedText(documentId, learnerId, courseId = null, conceptId = null) {
+async function getProcessedText(
+    documentId,
+    learnerId,
+    courseId = null,
+    conceptId = null
+) {
     if (!Number.isInteger(documentId) || documentId < 1) {
-        throw publicAIError(400, 'A valid document ID is required.', 'INVALID_DOCUMENT_ID');
+        throw publicAIError(
+            400,
+            'A valid document ID is required.',
+            'INVALID_DOCUMENT_ID'
+        );
     }
 
-    const sharedAccess = typeof courseId === 'string' && courseId.trim();
+    const sharedAccess =
+        typeof courseId === 'string' && courseId.trim();
+
     const [rows] = await mysql.execute(
         `SELECT
             ud.document_id,
@@ -143,12 +227,27 @@ async function getProcessedText(documentId, learnerId, courseId = null, conceptI
                   AND scoped_association.course_graph_id = ?
                   AND scoped_resource.concept_id = ?
            ))`,
-        [documentId, learnerId, sharedAccess ? 1 : 0, sharedAccess ? courseId : '', Number.isSafeInteger(Number(conceptId)) && Number(conceptId) > 0 ? 1 : 0, Number(conceptId) || 0,
-            Number.isSafeInteger(Number(conceptId)) && Number(conceptId) > 0 ? 1 : 0, courseId || '', Number(conceptId) || 0]
+        [
+            documentId,
+            learnerId,
+            sharedAccess ? 1 : 0,
+            sharedAccess ? courseId : '',
+            Number.isSafeInteger(Number(conceptId)) &&
+                Number(conceptId) > 0 ? 1 : 0,
+            Number(conceptId) || 0,
+            Number.isSafeInteger(Number(conceptId)) &&
+                Number(conceptId) > 0 ? 1 : 0,
+            courseId || '',
+            Number(conceptId) || 0
+        ]
     );
 
     if (!rows.length) {
-        throw publicAIError(404, 'Document not found or you do not have permission to access it.', 'DOCUMENT_UNAVAILABLE');
+        throw publicAIError(
+            404,
+            'Document not found or you do not have permission to access it.',
+            'DOCUMENT_UNAVAILABLE'
+        );
     }
 
     const document = rows[0];
@@ -159,22 +258,23 @@ async function getProcessedText(documentId, learnerId, courseId = null, conceptI
         sharedCourseRequest: Boolean(sharedAccess)
     });
 
-    if (String(document.processing_status).toLowerCase() !== 'processed') {
-        throw publicAIError(409, 'This document has not been processed yet. Please process it before using AI features.', 'DOCUMENT_NOT_PROCESSED');
+    if (
+        String(document.processing_status).toLowerCase() !== 'processed'
+    ) {
+        throw publicAIError(
+            409,
+            'This document has not been processed yet. Please process it before using AI features.',
+            'DOCUMENT_NOT_PROCESSED'
+        );
     }
 
     if (!document.file_path && !document.filename) {
-        throw publicAIError(422, 'This document has no available processed content.', 'DOCUMENT_CONTENT_UNAVAILABLE');
+        throw publicAIError(
+            422,
+            'This document has no available processed content.',
+            'DOCUMENT_CONTENT_UNAVAILABLE'
+        );
     }
-
-    /*
-     * The Python processor saves:
-     * storage/processed/<uploaded-file-stem>.txt
-     *
-     * Example:
-     * storage/uploads/12345-lecture.pdf
-     * storage/processed/12345-lecture.txt
-     */
 
     const candidateNames = [];
 
@@ -190,7 +290,6 @@ async function getProcessedText(documentId, learnerId, courseId = null, conceptI
         }
     }
 
-    // Fallback for older records.
     if (document.filename) {
         const originalStem = path.parse(
             path.basename(String(document.filename))
@@ -216,6 +315,7 @@ async function getProcessedText(documentId, learnerId, courseId = null, conceptI
             if (text) {
                 break;
             }
+
         } catch (error) {
             if (error.code === 'ENOENT') {
                 continue;
@@ -225,7 +325,6 @@ async function getProcessedText(documentId, learnerId, courseId = null, conceptI
         }
     }
 
-    // Case-insensitive fallback.
     if (!text) {
         try {
             const files = await fs.readdir(processedFolder);
@@ -242,6 +341,7 @@ async function getProcessedText(documentId, learnerId, courseId = null, conceptI
                 matchedPath = getSafeTextPath(match);
                 text = (await fs.readFile(matchedPath, 'utf8')).trim();
             }
+
         } catch (error) {
             if (error.code !== 'ENOENT') {
                 throw error;
@@ -255,11 +355,19 @@ async function getProcessedText(documentId, learnerId, courseId = null, conceptI
             candidateCount: uniqueNames.length
         });
 
-        throw publicAIError(404, 'Processed text is unavailable for this document.', 'PROCESSED_TEXT_UNAVAILABLE');
+        throw publicAIError(
+            404,
+            'Processed text is unavailable for this document.',
+            'PROCESSED_TEXT_UNAVAILABLE'
+        );
     }
 
     if (text.length > 30000) {
-        throw publicAIError(413, 'This document exceeds the current AI processing limit of 30,000 characters.', 'DOCUMENT_TEXT_TOO_LARGE');
+        throw publicAIError(
+            413,
+            'This document exceeds the current AI processing limit of 30,000 characters.',
+            'DOCUMENT_TEXT_TOO_LARGE'
+        );
     }
 
     console.log('[NeuroLearn] Extracted text loaded:', {
@@ -270,32 +378,94 @@ async function getProcessedText(documentId, learnerId, courseId = null, conceptI
     return { document, text };
 }
 
-// Handle AI errors.
 function handleAIError(res, error, action) {
-    logSafeError(console, `[NeuroLearn] ${action} failed`, error);
-    if ((error?.expose === true || (error?.status && error.providerError !== true)) && Number.isInteger(error.status)) {
-        return res.status(error.status).json({ error: error.message, code: error.code });
+    logSafeError(
+        console,
+        `[NeuroLearn] ${action} failed`,
+        error
+    );
+
+    if (
+        (
+            error?.expose === true ||
+            (error?.status && error.providerError !== true)
+        ) &&
+        Number.isInteger(error.status)
+    ) {
+        return res.status(error.status).json({
+            error: error.message,
+            code: error.code
+        });
     }
+
     return res.status(502).json({
         error: `The AI service could not ${action.toLowerCase()}. Please try again later.`,
         code: 'AI_PROVIDER_UNAVAILABLE'
     });
 }
 
+// This check protects AI operations for course concepts.
+// Personal uploads may omit both courseId and conceptId.
+async function enforceRequestedConceptAccess(req) {
+    const rawCourseId = req.body?.courseId;
+    const rawConceptId = req.body?.conceptId;
+
+    const hasCourseId =
+        typeof rawCourseId === 'string' && rawCourseId.trim();
+
+    const hasConceptId =
+        rawConceptId !== undefined &&
+        rawConceptId !== null &&
+        rawConceptId !== '';
+
+    if (!hasCourseId && !hasConceptId) {
+        return null;
+    }
+
+    if (!hasCourseId || !hasConceptId) {
+        throw publicAIError(
+            400,
+            'Both course and concept are required for shared learning materials.',
+            'INVALID_CONCEPT_SELECTION'
+        );
+    }
+
+    const conceptId = Number(rawConceptId);
+
+    if (!Number.isSafeInteger(conceptId) || conceptId < 1) {
+        throw publicAIError(
+            400,
+            'The selected concept is invalid.',
+            'INVALID_CONCEPT_SELECTION'
+        );
+    }
+
+    return requireConceptAccess(
+        req.user.learner_id,
+        rawCourseId.trim(),
+        conceptId
+    );
+}
+
 // =====================================================
 // POST /api/ai/summarize
-// Generate a summary of an authenticated learner's document.
 // =====================================================
 
 router.post('/summarize', authenticateToken, async (req, res) => {
     try {
+        await enforceRequestedConceptAccess(req);
         requireAI();
 
         const documentId = Number(req.body.documentId);
 
-        const { text } = await getProcessedText(documentId, req.user.learner_id,
-            typeof req.body.courseId === 'string' ? req.body.courseId.trim() : null,
-            req.body.conceptId);
+        const { text } = await getProcessedText(
+            documentId,
+            req.user.learner_id,
+            typeof req.body.courseId === 'string'
+                ? req.body.courseId.trim()
+                : null,
+            req.body.conceptId
+        );
 
         const response = await generateContentWithRetry({
             model: MODEL,
@@ -325,11 +495,11 @@ router.post('/summarize', authenticateToken, async (req, res) => {
 
 // =====================================================
 // POST /api/ai/chat
-// Chat about an authenticated learner's document.
 // =====================================================
 
 router.post('/chat', authenticateToken, async (req, res) => {
     try {
+        await enforceRequestedConceptAccess(req);
         requireAI();
 
         const documentId = Number(req.body.documentId);
@@ -350,7 +520,9 @@ router.post('/chat', authenticateToken, async (req, res) => {
         const { document, text } = await getProcessedText(
             documentId,
             req.user.learner_id,
-            typeof req.body.courseId === 'string' ? req.body.courseId.trim() : null,
+            typeof req.body.courseId === 'string'
+                ? req.body.courseId.trim()
+                : null,
             req.body.conceptId
         );
 
@@ -390,15 +562,17 @@ router.post('/chat', authenticateToken, async (req, res) => {
     }
 });
 
-
 // =====================================================
 // POST /api/ai/quiz
-// Generate a quiz for an authenticated learner.
 // =====================================================
 
 router.post('/quiz', authenticateToken, async (req, res) => {
     try {
-        const courseId = typeof req.body?.courseId === 'string' ? req.body.courseId.trim() : '';
+        const courseId =
+            typeof req.body?.courseId === 'string'
+                ? req.body.courseId.trim()
+                : '';
+
         if (!courseId) {
             return res.status(400).json({
                 success: false,
@@ -408,6 +582,7 @@ router.post('/quiz', authenticateToken, async (req, res) => {
         }
 
         const conceptId = Number(req.body?.conceptId);
+
         if (!Number.isSafeInteger(conceptId) || conceptId < 1) {
             return res.status(400).json({
                 success: false,
@@ -416,8 +591,16 @@ router.post('/quiz', authenticateToken, async (req, res) => {
             });
         }
 
-        requireAI();
         const learnerId = req.user.learner_id;
+
+        await requireConceptAccess(
+            learnerId,
+            courseId,
+            conceptId
+        );
+
+        requireAI();
+
         const documentId = Number(req.body.documentId);
         const questionCount = Number(req.body.questionCount ?? 5);
 
@@ -432,9 +615,13 @@ router.post('/quiz', authenticateToken, async (req, res) => {
         }
 
         const availableCourses = await getAllCourses();
+
         const matchingCourses = Array.isArray(availableCourses)
-            ? availableCourses.filter(course => course?.course_id === courseId)
+            ? availableCourses.filter(
+                course => course?.course_id === courseId
+            )
             : [];
+
         if (matchingCourses.length !== 1) {
             return res.status(404).json({
                 success: false,
@@ -455,8 +642,10 @@ router.post('/quiz', authenticateToken, async (req, res) => {
              INNER JOIN course AS approved_course ON approved_course.graph_course_id = cc.course_graph_id
              WHERE ud.document_id = ? AND ud.processing_status = 'processed'
                AND lr.concept_id = ? AND cc.course_graph_id = ?
-             LIMIT 1`, [documentId, conceptId, courseId]
+             LIMIT 1`,
+            [documentId, conceptId, courseId]
         );
+
         if (!documentAssociations.length) {
             return res.status(404).json({
                 success: false,
@@ -487,7 +676,14 @@ router.post('/quiz', authenticateToken, async (req, res) => {
                 message: 'No concepts are currently associated with this course. Ask an administrator to review its concept associations.'
             });
         }
-        if (concepts.some(concept => typeof concept.graph_concept_id !== 'string' || !concept.graph_concept_id.trim())) {
+
+        if (
+            concepts.some(
+                concept =>
+                    typeof concept.graph_concept_id !== 'string' ||
+                    !concept.graph_concept_id.trim()
+            )
+        ) {
             return res.status(503).json({
                 success: false,
                 code: 'COURSE_CONCEPT_MAPPING_UNAVAILABLE',
@@ -546,7 +742,6 @@ router.post('/quiz', authenticateToken, async (req, res) => {
             throw new Error('The AI returned invalid quiz JSON.');
         }
 
-        // Diagnose and retry once if Gemini returns the wrong number.
         if (
             !Array.isArray(quiz?.questions) ||
             quiz.questions.length !== questionCount
@@ -605,7 +800,7 @@ router.post('/quiz', authenticateToken, async (req, res) => {
         }
 
         const questions = quiz.questions.map(question => {
-            const conceptId = Number(question?.conceptId);
+            const generatedConceptId = Number(question?.conceptId);
 
             if (
                 !question ||
@@ -614,20 +809,26 @@ router.post('/quiz', authenticateToken, async (req, res) => {
                 !Array.isArray(question.options) ||
                 question.options.length !== 4 ||
                 question.options.some(
-                    option => typeof option !== 'string' || !option.trim()
+                    option =>
+                        typeof option !== 'string' ||
+                        !option.trim()
                 ) ||
                 new Set(question.options).size !== 4 ||
                 typeof question.correctAnswer !== 'string' ||
                 !question.options.includes(question.correctAnswer) ||
                 typeof question.explanation !== 'string' ||
-                !Number.isInteger(conceptId) ||
-                !validConceptIds.has(conceptId)
+                !Number.isInteger(generatedConceptId) ||
+                !validConceptIds.has(generatedConceptId)
             ) {
-                throw publicAIError(502, 'The generated quiz did not match the selected course. Please try again.', 'INVALID_GENERATED_QUIZ');
+                throw publicAIError(
+                    502,
+                    'The generated quiz did not match the selected course. Please try again.',
+                    'INVALID_GENERATED_QUIZ'
+                );
             }
 
             const concept = conceptList.find(
-                item => item.conceptId === conceptId
+                item => item.conceptId === generatedConceptId
             );
 
             return {
@@ -635,14 +836,17 @@ router.post('/quiz', authenticateToken, async (req, res) => {
                 options: question.options,
                 correctAnswer: question.correctAnswer,
                 explanation: question.explanation,
-                conceptId,
+                conceptId: generatedConceptId,
                 conceptName: concept.name
             };
         });
 
         const quizId = crypto.randomUUID();
 
-        const expiresAt = new Date(Date.now() + QUIZ_TTL_MS);
+        const expiresAt = new Date(
+            Date.now() + QUIZ_TTL_MS
+        );
+
         await quizAttemptService.createAttempt({
             quizId,
             learnerId,
@@ -651,7 +855,6 @@ router.post('/quiz', authenticateToken, async (req, res) => {
             expiresAt
         });
 
-        // Never expose correct answers before submission.
         return res.json({
             quizId,
             documentId,
@@ -661,14 +864,16 @@ router.post('/quiz', authenticateToken, async (req, res) => {
         });
 
     } catch (error) {
-        return handleAIError(res, error, 'generate quiz');
+        return handleAIError(
+            res,
+            error,
+            'generate quiz'
+        );
     }
 });
 
-
 // =====================================================
 // POST /api/ai/quiz/submit
-// Submit answers for the authenticated learner's quiz.
 // =====================================================
 
 router.post(
@@ -681,22 +886,37 @@ router.post(
                 learnerId: req.user.learner_id,
                 answers: req.body.answers
             });
+
             if (result.status === 'expired') {
                 return res.status(410).json({
                     error: 'This quiz attempt has expired. Generate a new quiz.',
                     code: 'QUIZ_ATTEMPT_EXPIRED'
                 });
             }
-            return res.status(result.status === 'created' ? 201 : 200).json(result.response);
+
+            return res
+                .status(result.status === 'created' ? 201 : 200)
+                .json(result.response);
+
         } catch (error) {
             if (error.status) {
-                return res.status(error.status).json({ error: error.message, code: error.code });
+                return res.status(error.status).json({
+                    error: error.message,
+                    code: error.code
+                });
             }
-            logSafeError(console, '[NeuroLearn] Quiz submission failed', error);
-            return res.status(500).json({ error: 'Could not save quiz results.' });
+
+            logSafeError(
+                console,
+                '[NeuroLearn] Quiz submission failed',
+                error
+            );
+
+            return res.status(500).json({
+                error: 'Could not save quiz results.'
+            });
         }
     }
 );
-
 
 module.exports = router;
