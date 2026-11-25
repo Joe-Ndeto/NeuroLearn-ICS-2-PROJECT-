@@ -6,6 +6,7 @@ const pool = mysql.createPool({
     user: process.env.MYSQL_USER,
     password: process.env.MYSQL_PASSWORD,
     database: process.env.MYSQL_DATABASE,
+    ssl: process.env.TIDB_ENABLE_SSL === 'true' ? {} : undefined,
     timezone: 'Z',
     waitForConnections: true,
     connectionLimit: 10,
