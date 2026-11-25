@@ -15,6 +15,7 @@ test('quiz routes persist generated attempts before responding and delegate repl
     const captured = {
         attempt: null,
         submit: null,
+        history: null,
         prompt: ''
     };
 
@@ -143,7 +144,7 @@ test('quiz routes persist generated attempts before responding and delegate repl
         }
     });
 
-    Module._load = function(request, parent, isMain) {
+    Module._load = function (request, parent, isMain) {
         if (
             parent?.filename === routePath &&
             request === '@google/genai'
@@ -203,6 +204,21 @@ test('quiz routes persist generated attempts before responding and delegate repl
                     captured.attempt = data;
                 },
 
+                async getHistory(data) {
+                    captured.history = data;
+
+                    return [{
+                        quizId: '9f7b2ab2-61f9-4f20-b8be-5d013caaf332',
+                        documentId: 21,
+                        assessmentId: 91,
+                        overallScore: 100,
+                        correctCount: 2,
+                        totalQuestions: 2,
+                        submittedAt: new Date('2026-11-24T10:00:00Z'),
+                        conceptResults: [],
+                        review: []
+                    }];
+                },
                 async submitAttempt(data) {
                     captured.submit = data;
 
@@ -240,7 +256,7 @@ test('quiz routes persist generated attempts before responding and delegate repl
             parent?.filename === routePath &&
             request === '../services/conceptAccessService'
         ) {
-            class FakeConceptAccessError extends Error {}
+            class FakeConceptAccessError extends Error { }
 
             return {
                 ConceptAccessError: FakeConceptAccessError,
@@ -647,6 +663,18 @@ test('quiz routes persist generated attempts before responding and delegate repl
                 conceptId: 11
             }
         ];
+
+        // Quiz history is scoped to the authenticated learner.
+        const historyResponse = await fetch(`${base}/quiz/history`);
+
+        assert.equal(historyResponse.status, 200);
+
+        const historyBody = await historyResponse.json();
+
+        assert.equal(historyBody.success, true);
+        assert.equal(historyBody.history.length, 1);
+        assert.equal(historyBody.history[0].overallScore, 100);
+        assert.equal(captured.history.learnerId, 7);
 
         // 13. Replay-safe quiz submission
 

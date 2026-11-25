@@ -1,0 +1,167 @@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Progress - NeuroLearn</title>
+
+    <link rel="stylesheet" href="dashboard.css">
+    <link rel="stylesheet" href="loading-spinner.css">
+    <link rel="stylesheet" href="progress.css">
+</head>
+
+<body>
+    <p class="page-session-message nl-loading-indicator"
+        id="progress-session-message"
+        role="status"
+        aria-label="Loading"
+        aria-busy="true">
+        <span class="nl-spinner" aria-hidden="true"></span>
+        <span class="nl-sr-only">Loading</span>
+    </p>
+
+    <header id="student-header" hidden>
+        <div class="logo-area">
+            <div class="logo-icon">NL</div>
+            <span>NeuroLearn</span>
+        </div>
+
+        <div class="nav-links">
+            <a href="dashboard.html">Dashboard</a>
+            <a href="study.html">Study</a>
+            <a href="quizzes.html">Quizzes</a>
+            <a href="progress.html" class="active" aria-current="page">Progress</a>
+            <a href="profile.html">Profile</a>
+        </div>
+
+        <div class="user-profile">
+            <img
+                src="https://via.placeholder.com/35"
+                alt="User profile"
+                class="user-avatar"
+            >
+
+            <span id="learner-name">Learner</span>
+
+            <button class="btn-logout" id="logout-button" type="button">
+                Logout
+            </button>
+        </div>
+    </header>
+
+    <main class="main-container progress-container"
+        id="progress-content"
+        hidden>
+
+        <section class="subheader">
+            <div class="ai-badge">TRACK YOUR LEARNING JOURNEY</div>
+            <h1>My Learning Progress</h1>
+            <p>
+                Monitor your course progress, concept mastery,
+                learning progression and prerequisite eligibility.
+            </p>
+        </section>
+
+        <section class="progress-section"
+            aria-labelledby="course-overview-heading">
+
+            <div class="section-title" id="course-overview-heading">
+                Course Overview
+            </div>
+
+            <p class="section-subtitle">
+                Select a course to view your learning progress.
+            </p>
+
+            <div class="progress-toolbar">
+                <label for="progress-course-filter">Select course</label>
+
+                <select id="progress-course-filter">
+                    <option value="">Loading courses...</option>
+                </select>
+
+                <button type="button"
+                    class="progress-refresh-button"
+                    id="refresh-progress">
+                    Refresh
+                </button>
+            </div>
+
+            <p id="progress-status"
+                class="progress-status"
+                role="status"
+                aria-live="polite">
+                Loading your learning progress...
+            </p>
+
+            <div id="course-overview-content"
+                class="progress-overview-grid">
+            </div>
+        </section>
+
+        <section class="progress-section"
+            aria-labelledby="mastery-summary-heading">
+
+            <div class="section-title" id="mastery-summary-heading">
+                Mastery Summary
+            </div>
+
+            <p class="section-subtitle">
+                Understand how many concepts you have assessed
+                and mastered.
+            </p>
+
+            <div id="mastery-summary-content"
+                class="progress-summary-grid">
+            </div>
+        </section>
+
+        <section class="progress-section"
+            aria-labelledby="concept-progression-heading">
+
+            <div class="section-title" id="concept-progression-heading">
+                Concept Progression
+            </div>
+
+            <p class="section-subtitle">
+                Explore your learning concepts, mastery levels
+                and available learning paths.
+            </p>
+
+            <div id="concept-progression-content"
+                class="progress-concepts-grid">
+            </div>
+        </section>
+
+        <section class="progress-section"
+            aria-labelledby="prerequisite-eligibility-heading">
+
+            <div class="section-title" id="prerequisite-eligibility-heading">
+                Prerequisite Eligibility
+            </div>
+
+            <p class="section-subtitle">
+                Check whether you have satisfied the prerequisite
+                requirements for your selected course.
+            </p>
+
+            <div id="prerequisite-eligibility-content"
+                class="progress-prerequisites-list">
+            </div>
+        </section>
+
+        <footer class="ai-footer">
+            Powered by adaptive AI algorithms
+        </footer>
+    </main>
+
+    <script src="config.js" defer></script>
+    <script src="api.js" defer></script>
+    <script src="loading-spinner.js" defer></script>
+    <script src="role-routing.js" defer></script>
+    <script src="progress.js" defer></script>
+</body>
+
+</html>

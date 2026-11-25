@@ -97,6 +97,52 @@ function createQuizAttemptService({ db = mysql, now = () => new Date() } = {}) {
         );
     }
 
+
+async function getHistory({ learnerId }) {
+    if (!Number.isSafeInteger(Number(learnerId)) || Number(learnerId) <= 0) {
+        throw new QuizAttemptError(
+            400,
+            'A valid learner ID is required.',
+            'INVALID_LEARNER_ID'
+        );
+    }
+
+    const [rows] = await db.execute(
+        `SELECT
+            qa.quiz_id AS quizId,
+            qa.document_id AS documentId,
+            qa.submitted_at AS submittedAt,
+            a.assessment_id AS assessmentId,
+            a.overall_score AS overallScore,
+            qa.response_json AS responseJson
+         FROM quiz_attempt AS qa
+         INNER JOIN assessment AS a
+            ON a.quiz_attempt_id = qa.quiz_id
+            AND a.learner_id = qa.learner_id
+         WHERE qa.learner_id = ?
+            AND qa.status = 'submitted'
+         ORDER BY qa.submitted_at DESC, a.assessment_id DESC`,
+        [Number(learnerId)]
+    );
+
+    return rows.map(row => {
+        const response = parseJson(row.responseJson);
+
+        return {
+            quizId: row.quizId,
+            documentId: row.documentId,
+            submittedAt: row.submittedAt,
+            assessmentId: row.assessmentId,
+            overallScore: Number(row.overallScore),
+            correctCount: response.correctCount,
+            totalQuestions: response.totalQuestions,
+            conceptResults: response.conceptResults || [],
+            review: response.review || []
+        };
+    });
+}
+
+
     async function reconcile(quizId, learnerId, answerHash) {
         let connection;
         try {
@@ -364,7 +410,7 @@ function createQuizAttemptService({ db = mysql, now = () => new Date() } = {}) {
         }
     }
 
-    return { createAttempt, submitAttempt };
+    return { createAttempt, submitAttempt, getHistory };
 }
 
 const service = createQuizAttemptService();

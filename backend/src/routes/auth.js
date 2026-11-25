@@ -347,4 +347,290 @@ router.get('/me', authenticateToken, (req, res) => {
     });
 });
 
+router.get('/password-status', authenticateToken, async (req, res) => {
+    try {
+        if (req.user.role !== 'student') {
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied.'
+            });
+        }
+
+        const [rows] = await pool.execute(
+            `SELECT password_hash, google_id
+             FROM learner
+             WHERE learner_id = ?`,
+            [req.user.learner_id]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Account not found.'
+            });
+        }
+
+        return res.json({
+            success: true,
+            hasPassword: Boolean(rows[0].password_hash),
+            googleLinked: Boolean(rows[0].google_id)
+        });
+    } catch (error) {
+        console.error('Password status error:', error);
+
+        return res.status(500).json({
+            success: false,
+            message: 'Unable to retrieve password status.'
+        });
+    }
+});
+
+// Update the authenticated student's username and email.
+router.patch('/profile', authenticateToken, async (req, res) => {
+    if (req.user.role !== 'student') {
+        return res.status(403).json({
+            success: false,
+            message: 'Only student accounts can update profile details.'
+        });
+    }
+
+    const { username, email } = req.body || {};
+
+    if (
+        typeof username !== 'string' ||
+        typeof email !== 'string'
+    ) {
+        return res.status(400).json({
+            success: false,
+            message: 'Username and email are required.'
+        });
+    }
+
+    const cleanUsername = username.trim().replace(/\s+/g, ' ');
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (!cleanUsername || cleanUsername.length > 100) {
+        return res.status(400).json({
+            success: false,
+            message: 'Username must contain between 1 and 100 characters.'
+        });
+    }
+
+    if (
+        cleanEmail.length > 255 ||
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)
+    ) {
+        return res.status(400).json({
+            success: false,
+            message: 'Please provide a valid email address.'
+        });
+    }
+
+    try {
+        const [existing] = await pool.execute(
+            `SELECT learner_id
+             FROM learner
+             WHERE (username = ? OR email = ?)
+               AND learner_id <> ?`,
+            [cleanUsername, cleanEmail, req.user.learner_id]
+        );
+
+        if (existing.length > 0) {
+            return res.status(409).json({
+                success: false,
+                message: 'That username or email is already in use.'
+            });
+        }
+
+        await pool.execute(
+            `UPDATE learner
+             SET username = ?, email = ?
+             WHERE learner_id = ?`,
+            [cleanUsername, cleanEmail, req.user.learner_id]
+        );
+
+        const [learners] = await pool.execute(
+            `SELECT learner_id, username, email, role
+             FROM learner
+             WHERE learner_id = ?`,
+            [req.user.learner_id]
+        );
+
+        if (learners.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Account not found.'
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: 'Profile updated successfully.',
+            learner: learners[0]
+        });
+
+    } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({
+                success: false,
+                message: 'That username or email is already in use.'
+            });
+        }
+
+        console.error('Profile update error:', error);
+
+        return res.status(500).json({
+            success: false,
+            message: 'Profile update failed. Please try again.'
+        });
+    }
+});
+
+
+// Change or set the authenticated student's password.
+router.patch('/password', authenticateToken, async (req, res) => {
+    if (req.user.role !== 'student') {
+        return res.status(403).json({
+            success: false,
+            message: 'Only student accounts can change passwords.'
+        });
+    }
+
+    const {
+        currentPassword,
+        newPassword,
+        googleCredential
+    } = req.body || {};
+
+    if (
+        typeof newPassword !== 'string' ||
+        !newPassword
+    ) {
+        return res.status(400).json({
+            success: false,
+            message: 'A new password is required.'
+        });
+    }
+
+    if (newPassword.length < 8) {
+        return res.status(400).json({
+            success: false,
+            message: 'New password must be at least 8 characters long.'
+        });
+    }
+
+    try {
+        const [learners] = await pool.execute(
+            `SELECT password_hash, google_id
+             FROM learner
+             WHERE learner_id = ?`,
+            [req.user.learner_id]
+        );
+
+        if (learners.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Account not found.'
+            });
+        }
+
+        const learner = learners[0];
+
+        // Existing email/password account.
+        if (learner.password_hash) {
+            if (
+                typeof currentPassword !== 'string' ||
+                !currentPassword
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Your current password is required.'
+                });
+            }
+
+            const passwordMatches = await bcrypt.compare(
+                currentPassword,
+                learner.password_hash
+            );
+
+            if (!passwordMatches) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Your current password is incorrect.'
+                });
+            }
+        } else {
+            // Google-only account: verify fresh Google credentials.
+            if (
+                typeof googleCredential !== 'string' ||
+                !googleCredential
+            ) {
+                return res.status(401).json({
+                    success: false,
+                    code: 'GOOGLE_REAUTHENTICATION_REQUIRED',
+                    message: 'Please verify your Google account before setting a password.'
+                });
+            }
+
+            if (!learner.google_id) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'This account cannot set a password using Google verification.'
+                });
+            }
+
+            let payload;
+
+            try {
+                const ticket = await googleClient.verifyIdToken({
+                    idToken: googleCredential,
+                    audience: process.env.GOOGLE_CLIENT_ID
+                });
+
+                payload = ticket.getPayload();
+            } catch {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Google account verification failed. Please try again.'
+                });
+            }
+
+            if (
+                !payload ||
+                !payload.sub ||
+                payload.sub !== learner.google_id ||
+                payload.email_verified !== true
+            ) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'The verified Google account does not match your NeuroLearn account.'
+                });
+            }
+        }
+
+        const newPasswordHash = await bcrypt.hash(newPassword, 10);
+
+        await pool.execute(
+            `UPDATE learner
+             SET password_hash = ?
+             WHERE learner_id = ?`,
+            [newPasswordHash, req.user.learner_id]
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: 'Password set successfully.'
+        });
+
+    } catch (error) {
+        console.error('Password update error:', error);
+
+        return res.status(500).json({
+            success: false,
+            message: 'Password update failed. Please try again.'
+        });
+    }
+});
+
+
 module.exports = router;

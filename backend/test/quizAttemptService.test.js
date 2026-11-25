@@ -145,6 +145,7 @@ function makeDb() {
                     });
                     return [{ affectedRows: attempt?.status === 'submitted' ? 1 : 0 }];
                 }
+
                 throw new Error(`Unexpected SQL in test fake: ${normalized}`);
             },
             async commit() {
@@ -191,8 +192,39 @@ function makeDb() {
         };
         return connection;
     }
+
     const db = {
         async execute(sql, params) {
+            if (sql.includes('FROM quiz_attempt AS qa') &&
+                sql.includes('INNER JOIN assessment AS a')) {
+                const learnerId = Number(params[0]);
+
+                const rows = [...data.attempts.values()]
+                    .filter(attempt =>
+                        Number(attempt.learner_id) === learnerId &&
+                        attempt.status === 'submitted'
+                    )
+                    .flatMap(attempt => {
+                        const assessment = data.assessments.find(row =>
+                            row.quiz_attempt_id === attempt.quiz_id &&
+                            Number(row.learner_id) === learnerId
+                        );
+
+                        if (!assessment) return [];
+
+                        return [{
+                            quizId: attempt.quiz_id,
+                            documentId: attempt.document_id,
+                            submittedAt: attempt.submitted_at,
+                            assessmentId: assessment.assessment_id,
+                            overallScore: assessment.overall_score,
+                            responseJson: attempt.response_json
+                        }];
+                    });
+
+                return [rows];
+            }
+
             const [quizId, learnerId, documentId, questionsJson, expiresAt] = params;
             data.attempts.set(quizId, {
                 quiz_id: quizId, learner_id: learnerId, document_id: documentId,
@@ -216,6 +248,57 @@ function makeDb() {
 async function makeAttempt(service, { quizId = QUIZ_ID, learnerId = 7, expiresAt = new Date(Date.now() + 60_000), questions = QUESTIONS } = {}) {
     await service.createAttempt({ quizId, learnerId, documentId: 21, questions, expiresAt });
 }
+
+
+test('quiz history returns only submitted attempts belonging to the requested learner', async () => {
+    const { db, data } = makeDb();
+    const service = createQuizAttemptService({ db });
+
+    const secondQuizId = 'a71a9d4b-7257-45a9-91d6-997a44ed7f62';
+    const openQuizId = 'b71a9d4b-7257-45a9-91d6-997a44ed7f62';
+
+    // Learner 7 has one submitted quiz and one unfinished quiz.
+    await makeAttempt(service, { quizId: QUIZ_ID, learnerId: 7 });
+    await makeAttempt(service, { quizId: openQuizId, learnerId: 7 });
+
+    // Learner 8 has a separate submitted quiz.
+    await makeAttempt(service, { quizId: secondQuizId, learnerId: 8 });
+
+    await service.submitAttempt({
+        quizId: QUIZ_ID,
+        learnerId: 7,
+        answers: ANSWERS
+    });
+
+    await service.submitAttempt({
+        quizId: secondQuizId,
+        learnerId: 8,
+        answers: ANSWERS
+    });
+
+    const history = await service.getHistory({ learnerId: 7 });
+
+    assert.equal(history.length, 1);
+    assert.equal(history[0].quizId, QUIZ_ID);
+    assert.equal(history[0].documentId, 21);
+    assert.equal(history[0].overallScore, 66.67);
+    assert.equal(history[0].correctCount, 2);
+    assert.equal(history[0].totalQuestions, 3);
+    assert.equal(history[0].review.length, 3);
+    assert.ok(history[0].assessmentId);
+    assert.ok(history[0].submittedAt);
+
+    // The unfinished attempt must not appear.
+    assert.ok(!history.some(item => item.quizId === openQuizId));
+
+    // Learner 8 must not appear in learner 7's history.
+    assert.ok(!history.some(item => item.quizId === secondQuizId));
+
+    // A learner without submitted quizzes gets an empty history.
+    const emptyHistory = await service.getHistory({ learnerId: 8 });
+    assert.equal(emptyHistory.length, 1);
+});
+
 
 test('durably creates an attempt with private answer key and returns expiry metadata only to storage', async () => {
     const { db, data } = makeDb();

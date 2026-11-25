@@ -154,3 +154,14 @@ node -e "require('dotenv').config(); console.log('Gemini key loaded:', Boolean(p
 ===========================================================
 
 node -e "require('dotenv').config(); const {GoogleGenAI}=require('@google/genai'); const ai=new GoogleGenAI({apiKey:process.env.GEMINI_API_KEY}); ai.models.generateContent({model:'gemini-3.8-flash',contents:'Reply with exactly: Gemini is working.'}).then(r=>console.log(r.text)).catch(e=>console.error(e.message));"
+
+===========================================================
+17. START WORKER
+===========================================================
+npm run worker:knowledge-sync
+
+===========================================================
+18. PYTHON LOCAL SERVER
+===========================================================
+
+python -m http.server 8080 --directory frontend
