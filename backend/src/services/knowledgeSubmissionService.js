@@ -266,7 +266,18 @@ const ADMIN_SUBMISSION_SELECT = `
     LEFT JOIN knowledge_sync_outbox AS o
         ON o.submission_id = s.submission_id`;
 
+
 async function getAdminSubmissions({ status, type, syncStatus, limit, offset }) {
+    const safeLimit = Number(limit);
+    const safeOffset = Number(offset);
+
+    if (
+        !Number.isSafeInteger(safeLimit) || safeLimit < 1 ||
+        !Number.isSafeInteger(safeOffset) || safeOffset < 0
+    ) {
+        throw new Error('Invalid admin submission pagination values.');
+    }
+
     const conditions = [];
     const values = [];
 
@@ -300,8 +311,8 @@ async function getAdminSubmissions({ status, type, syncStatus, limit, offset }) 
     const [rows] = await mysql.execute(
         `${ADMIN_SUBMISSION_SELECT}${whereClause}
          ORDER BY s.submitted_at DESC, s.submission_id DESC
-         LIMIT ? OFFSET ?`,
-        [...values, limit, offset]
+         LIMIT ${safeLimit} OFFSET ${safeOffset}`,
+        values
     );
 
     return {
@@ -309,6 +320,7 @@ async function getAdminSubmissions({ status, type, syncStatus, limit, offset }) 
         submissions: rows.map(formatAdminSubmission)
     };
 }
+
 
 async function getAdminSubmission(submissionId) {
     const [rows] = await mysql.execute(
@@ -437,9 +449,11 @@ async function retryFailedOutboxTask(outboxId) {
             if (reconciliation.outcome === 'committed') {
                 return { outcome: 'retried', sync: reconciliation.sync };
             }
-            return { outcome: reconciliation.outcome === 'not_committed'
-                ? 'commit_not_committed'
-                : 'commit_uncertain' };
+            return {
+                outcome: reconciliation.outcome === 'not_committed'
+                    ? 'commit_not_committed'
+                    : 'commit_uncertain'
+            };
         }
     } catch (error) {
         primaryError = error;
@@ -717,11 +731,11 @@ async function reviewPendingSubmission({
 
         let canonicalType = null;
         let canonicalId = null;
-                if (status === 'approved') {
+        if (status === 'approved') {
             if (
                 submission.submission_type !== preflight.submission_type ||
                 JSON.stringify(parseSubmissionData(submission.submission_data)) !==
-                    JSON.stringify(parseSubmissionData(preflight.submission_data))
+                JSON.stringify(parseSubmissionData(preflight.submission_data))
             ) {
                 throw new ApprovalError(
                     'submission_changed',
@@ -925,7 +939,7 @@ async function reviewPendingSubmission({
                 );
             }
         }
-                const [reviewResult] = await connection.execute(
+        const [reviewResult] = await connection.execute(
             `UPDATE knowledge_submissions
              SET status = ?, review_notes = ?, reviewed_by = ?,
                  reviewed_at = CURRENT_TIMESTAMP
@@ -1441,7 +1455,7 @@ function existingResourceResult(row, fingerprint) {
     if (!Number.isSafeInteger(Number(submission.submissionData?.document?.documentId))) {
         throw resourceRequestError(503, 'SUBMISSION_LINK_UNAVAILABLE', 'The saved document submission could not be safely retrieved.');
     }
-        return { submission, replayed: true, processingStatus: row.document_processing_status || 'unknown' };
+    return { submission, replayed: true, processingStatus: row.document_processing_status || 'unknown' };
 }
 
 async function createPendingResourceSubmission({ learnerId, title, courseId, conceptId, document, idempotencyKey, fingerprint }) {
@@ -1568,7 +1582,18 @@ async function createPendingResourceSubmission({ learnerId, title, courseId, con
     return result;
 }
 
+
 async function getLearnerSubmissions(learnerId, limit, offset) {
+    const safeLimit = Number(limit);
+    const safeOffset = Number(offset);
+
+    if (
+        !Number.isSafeInteger(safeLimit) || safeLimit < 1 ||
+        !Number.isSafeInteger(safeOffset) || safeOffset < 0
+    ) {
+        throw new Error('Invalid submission pagination values.');
+    }
+
     const [[countRow]] = await mysql.execute(
         `SELECT COUNT(*) AS total
          FROM knowledge_submissions
@@ -1582,8 +1607,8 @@ async function getLearnerSubmissions(learnerId, limit, offset) {
          FROM knowledge_submissions
          WHERE submitted_by = ?
          ORDER BY submitted_at DESC, submission_id DESC
-         LIMIT ? OFFSET ?`,
-        [learnerId, limit, offset]
+         LIMIT ${safeLimit} OFFSET ${safeOffset}`,
+        [learnerId]
     );
 
     return {
@@ -1591,6 +1616,7 @@ async function getLearnerSubmissions(learnerId, limit, offset) {
         submissions: rows.map(formatSubmission)
     };
 }
+
 
 module.exports = {
     ApprovalError,
