@@ -1,6 +1,6 @@
-
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -12,12 +12,13 @@
     <script src="loading-spinner.js" defer></script>
     <script src="study.js" defer></script>
 </head>
+
 <body>
     <div class="workspace">
 
         <aside class="sidebar">
             <a href="dashboard.html" class="brand">
-                <span class="brand-icon">✿</span>
+                <span class="brand-icon">🧠</span>
                 <span>
                     <strong>NeuroLearn</strong>
                     <small>AI Study Partner</small>
@@ -26,9 +27,8 @@
 
             <nav class="navigation">
                 <a href="dashboard.html">⌂ <span>Dashboard</span></a>
-                <a href="study.html" class="active">▣ <span>Study Workspace</span></a>
-                <a href="#materials">▤ <span>My Documents</span></a>
-                <a href="dashboard.html">▥ <span>Progress</span></a>
+                <a href="study.html" class="active"><span>Study Workspace</span></a>
+                <a href="progress.html"><span>Progress</span></a>
             </nav>
 
             <div class="sidebar-help">
@@ -53,18 +53,13 @@
             <section class="materials-panel" id="materials">
                 <div class="panel-heading">
                     <h2>Learning Library</h2>
-                    <button
-                        id="refresh-documents"
-                        class="icon-button"
-                        title="Refresh documents">
+                    <button id="refresh-documents" class="icon-button" title="Refresh documents">
                         ↻
                     </button>
                 </div>
 
                 <label for="library-course">Course</label>
-                <select
-                    id="library-course"
-                    aria-describedby="library-course-help">
+                <select id="library-course" aria-describedby="library-course-help">
                     <option value="">
                         Select a course to browse shared materials
                     </option>
@@ -77,10 +72,7 @@
 
                 <!-- Concept selector -->
                 <label for="library-concept">Concept</label>
-                <select
-                    id="library-concept"
-                    aria-describedby="library-concept-help"
-                    disabled>
+                <select id="library-concept" aria-describedby="library-concept-help" disabled>
                     <option value="">Select a course first</option>
                 </select>
 
@@ -95,27 +87,16 @@
                     and approved shared materials appear here when available.
                 </p>
 
-                <input
-                    type="search"
-                    id="document-search"
-                    placeholder="Search documents...">
+                <input type="search" id="document-search" placeholder="Search documents...">
 
-                <p
-                    id="document-status"
-                    class="status-message nl-loading-indicator"
-                    role="status"
-                    aria-label="Loading"
+                <p id="document-status" class="status-message nl-loading-indicator" role="status" aria-label="Loading"
                     aria-busy="true">
                     <span class="nl-spinner" aria-hidden="true"></span>
                     <span class="nl-sr-only">Loading</span>
                 </p>
 
                 <div id="document-list" class="document-list">
-                    <p
-                        class="empty-message nl-loading-indicator"
-                        role="status"
-                        aria-label="Loading"
-                        aria-busy="true">
+                    <p class="empty-message nl-loading-indicator" role="status" aria-label="Loading" aria-busy="true">
                         <span class="nl-spinner" aria-hidden="true"></span>
                         <span class="nl-sr-only">Loading</span>
                     </p>
@@ -144,17 +125,12 @@
                         <p>Understand your notes, one question at a time.</p>
                     </div>
 
-                    <button
-                        id="summary-button"
-                        class="secondary-button">
+                    <button id="summary-button" class="secondary-button">
                         Summarize
                     </button>
                 </div>
 
-                <div
-                    id="chat-messages"
-                    class="chat-messages"
-                    aria-live="polite">
+                <div id="chat-messages" class="chat-messages" aria-live="polite">
 
                     <div class="welcome-message">
                         <div class="welcome-icon">✦</div>
@@ -188,16 +164,10 @@
                 </div>
 
                 <form id="chat-form" class="chat-form">
-                    <textarea
-                        id="chat-input"
-                        placeholder="Ask a question about your document..."
-                        rows="2"
+                    <textarea id="chat-input" placeholder="Ask a question about your document..." rows="2"
                         required></textarea>
 
-                    <button
-                        type="submit"
-                        id="send-button"
-                        aria-label="Send message">
+                    <button type="submit" id="send-button" aria-label="Send message">
                         ➤
                     </button>
                 </form>
@@ -211,23 +181,17 @@
             <!-- Summary and Quiz Panel -->
             <aside class="study-panel">
                 <div class="study-tabs">
-                    <button
-                        class="study-tab active"
-                        data-tab="summary">
+                    <button class="study-tab active" data-tab="summary">
                         Summary
                     </button>
 
-                    <button
-                        class="study-tab"
-                        data-tab="quiz">
+                    <button class="study-tab" data-tab="quiz">
                         Quiz
                     </button>
                 </div>
 
                 <!-- Summary -->
-                <section
-                    class="tab-content active"
-                    id="summary-tab">
+                <section class="tab-content active" id="summary-tab">
 
                     <h2>Document Summary</h2>
 
@@ -236,24 +200,17 @@
                         selected learning material.
                     </p>
 
-                    <button
-                        id="panel-summary-button"
-                        class="primary-button">
+                    <button id="panel-summary-button" class="primary-button">
                         Generate Summary
                     </button>
 
-                    <div
-                        id="summary-result"
-                        class="result-content">
+                    <div id="summary-result" class="result-content">
                         Your summary will appear here.
                     </div>
                 </section>
 
                 <!-- Quiz -->
-                <section
-                    class="tab-content"
-                    id="quiz-tab"
-                    hidden>
+                <section class="tab-content" id="quiz-tab" hidden>
 
                     <h2>Practice Quiz</h2>
 
@@ -263,16 +220,11 @@
 
                     <label for="quiz-course">Course</label>
 
-                    <select
-                        id="quiz-course"
-                        required
-                        aria-describedby="quiz-course-help">
+                    <select id="quiz-course" required aria-describedby="quiz-course-help">
                         <option value="">Select a course</option>
                     </select>
 
-                    <p
-                        id="quiz-course-help"
-                        class="status-message">
+                    <p id="quiz-course-help" class="status-message">
                         Choose the course that matches your learning
                         material. Quiz questions use only concepts
                         associated with that course.
@@ -288,15 +240,11 @@
                         <option value="10">10 questions</option>
                     </select>
 
-                    <button
-                        id="generate-quiz-button"
-                        class="primary-button">
+                    <button id="generate-quiz-button" class="primary-button">
                         Generate Quiz
                     </button>
 
-                    <div
-                        id="quiz-result"
-                        class="result-content">
+                    <div id="quiz-result" class="result-content">
                         Your quiz will appear here.
                     </div>
                 </section>
@@ -305,4 +253,5 @@
         </main>
     </div>
 </body>
+
 </html>

@@ -531,7 +531,6 @@ async function reconcileManualRetry(expectedTask) {
         }
     }
 }
-
 async function reviewPendingSubmission({
     submissionId,
     status,
@@ -574,15 +573,11 @@ async function reviewPendingSubmission({
             if (!CONCEPT_DIFFICULTY_LEVELS.has(difficultyLevel)) {
                 throw new ApprovalError('invalid_difficulty_level', 'Select a valid difficulty level before approving this concept.', 400);
             }
-            const domainCourseIds = await getDatabaseDomainCourseIds();
-            if (!domainCourseIds.length) {
-                throw new ApprovalError('database_domain_unavailable', 'The existing Database Concepts course is unavailable.', 422);
-            }
+
             try {
+                // Concepts may be associated with any existing approved course.
+                // validateCourseIds rejects malformed IDs and nonexistent courses.
                 validatedCourseIds = await validateCourseIds(courseIds);
-                if (validatedCourseIds.some(id => !domainCourseIds.includes(id))) {
-                    throw new CourseValidationError('COURSES_NOT_FOUND', 'Concepts can only be associated with Database Concepts.');
-                }
             } catch (error) {
                 if (error instanceof ApprovalError) throw error;
                 if (error instanceof CourseValidationError) {
@@ -722,8 +717,7 @@ async function reviewPendingSubmission({
 
         let canonicalType = null;
         let canonicalId = null;
-
-        if (status === 'approved') {
+                if (status === 'approved') {
             if (
                 submission.submission_type !== preflight.submission_type ||
                 JSON.stringify(parseSubmissionData(submission.submission_data)) !==
@@ -931,8 +925,7 @@ async function reviewPendingSubmission({
                 );
             }
         }
-
-        const [reviewResult] = await connection.execute(
+                const [reviewResult] = await connection.execute(
             `UPDATE knowledge_submissions
              SET status = ?, review_notes = ?, reviewed_by = ?,
                  reviewed_at = CURRENT_TIMESTAMP
@@ -1448,7 +1441,7 @@ function existingResourceResult(row, fingerprint) {
     if (!Number.isSafeInteger(Number(submission.submissionData?.document?.documentId))) {
         throw resourceRequestError(503, 'SUBMISSION_LINK_UNAVAILABLE', 'The saved document submission could not be safely retrieved.');
     }
-    return { submission, replayed: true, processingStatus: row.document_processing_status || 'unknown' };
+        return { submission, replayed: true, processingStatus: row.document_processing_status || 'unknown' };
 }
 
 async function createPendingResourceSubmission({ learnerId, title, courseId, conceptId, document, idempotencyKey, fingerprint }) {

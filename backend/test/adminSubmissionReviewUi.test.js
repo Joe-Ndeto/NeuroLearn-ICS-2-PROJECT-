@@ -13,6 +13,7 @@ const {
 } = require('../../frontend/admin-submissions');
 
 const COURSE_ID = 'COURSE-00111111-1111-4111-8111-111111111111';
+const COURSE_ID_2 = 'COURSE-00222222-2222-4222-8222-222222222222';
 
 class FakeElement {
     constructor() {
@@ -410,9 +411,9 @@ test('concept approval requires and sends administrator difficulty with course I
     let confirmation = '';
     const callsByPath = {
         '/admin/submissions/17': { success: true, submission: submission() },
-        '/kg/courses': { success: true, courses: [
-            { course_id: COURSE_ID, name: 'Database Concepts' },
-            { course_id: 'COURSE-002', name: 'Algorithms' }
+        '/admin/submissions/courses': { success: true, courses: [
+            { courseId: 1, courseGraphId: COURSE_ID, title: 'Database Concepts' },
+            { courseId: 2, courseGraphId: COURSE_ID_2, title: 'Algorithms' }
         ] }
     };
     const { controller } = createController({
@@ -425,11 +426,12 @@ test('concept approval requires and sends administrator difficulty with course I
     });
     await controller.openDetail(17);
     assert.equal(elements.difficultyField.hidden, false);
-    assert.deepEqual(paths, ['/admin/submissions/17', '/kg/courses']);
-    assert.deepEqual(elements.courses.children.map(option => option.value), [COURSE_ID]);
+    assert.deepEqual(paths, ['/admin/submissions/17', '/admin/submissions/courses']);
+    assert.deepEqual(elements.courses.children.map(option => option.value), [COURSE_ID, COURSE_ID_2]);
     assert.match(elements.courses.children[0].textContent, new RegExp(`Database Concepts \\(${COURSE_ID}\\)`));
+    assert.match(elements.courses.children[1].textContent, new RegExp(`Algorithms \\(${COURSE_ID_2}\\)`));
     assert.equal(elements.approve.disabled, true);
-    elements.courses.selectedOptions = [elements.courses.children[0]];
+    elements.courses.selectedOptions = [elements.courses.children[1]];
     elements.courses.listeners.change();
     assert.equal(elements.approve.disabled, true);
     elements.difficulty.value = 'Advanced';
@@ -438,7 +440,7 @@ test('concept approval requires and sends administrator difficulty with course I
     elements.notes.value = 'Looks good';
     await elements.approve.listeners.click();
     assert.match(confirmation, /Approve submission #17/);
-    assert.deepEqual(approvalPayload, { reviewNotes: 'Looks good', courseIds: [COURSE_ID], difficultyLevel: 'Advanced' });
+    assert.deepEqual(approvalPayload, { reviewNotes: 'Looks good', courseIds: [COURSE_ID_2], difficultyLevel: 'Advanced' });
     assert.ok(paths.includes('/admin/submissions/17/approve'));
     assert.equal(elements.queueNotice.textContent, 'Submission approved.');
 });
@@ -448,7 +450,7 @@ test('concept approval cannot proceed without a valid administrator difficulty',
     let approvalCalls = 0;
     const { controller } = createController({ elements, api: {
         async get(path) {
-            if (path === '/kg/courses') return { courses: [{ course_id: COURSE_ID, name: 'Database Concepts' }] };
+            if (path === '/admin/submissions/courses') return { courses: [{ courseId: 1, courseGraphId: COURSE_ID, title: 'Database Concepts' }] };
             return { submission: submission() };
         },
         async patch() { approvalCalls += 1; return { success: true }; }
@@ -469,12 +471,12 @@ test('course load failure keeps concept approval unavailable without creating a 
         elements,
         api: { async get(path) {
             paths.push(path);
-            if (path === '/kg/courses') throw new Error('graph unavailable');
+            if (path === '/admin/submissions/courses') throw new Error('graph unavailable');
             return { success: true, submission: submission() };
         } }
     });
     await controller.openDetail(17);
-    assert.deepEqual(paths, ['/admin/submissions/17', '/kg/courses']);
+    assert.deepEqual(paths, ['/admin/submissions/17', '/admin/submissions/courses']);
     assert.equal(elements.approve.disabled, true);
     assert.match(elements.courseMessage.textContent, /Course lookup failed/i);
 });
@@ -519,16 +521,16 @@ test('course selector distinguishes an empty graph from a failed course lookup',
     const empty = createElements();
     const emptyController = createController({
         elements: empty,
-        api: { async get(path) { return path === '/kg/courses' ? { courses: [] } : { submission: submission() }; } }
+        api: { async get(path) { return path === '/admin/submissions/courses' ? { courses: [] } : { submission: submission() }; } }
     }).controller;
     await emptyController.openDetail(17);
-    assert.match(empty.courseMessage.textContent, /No courses are available/i);
+    assert.match(empty.courseMessage.textContent, /No approved courses are available/i);
     assert.equal(empty.approve.disabled, true);
 
     const failed = createElements();
     const failedController = createController({
         elements: failed,
-        api: { async get(path) { if (path === '/kg/courses') throw new Error('offline'); return { submission: submission() }; } }
+        api: { async get(path) { if (path === '/admin/submissions/courses') throw new Error('offline'); return { submission: submission() }; } }
     }).controller;
     await failedController.openDetail(17);
     assert.match(failed.courseMessage.textContent, /Course lookup failed/i);
@@ -538,12 +540,12 @@ test('course selector distinguishes an empty graph from a failed course lookup',
     const malformedController = createController({
         elements: malformed,
         api: { async get(path) {
-            if (path === '/kg/courses') return { courses: [{ course_id: 'legacy-id', name: 'Database Concepts' }] };
+            if (path === '/admin/submissions/courses') return { courses: [{ courseId: 3, courseGraphId: 'legacy-id', title: 'Database Concepts' }] };
             return { submission: submission() };
         } }
     }).controller;
     await malformedController.openDetail(17);
-    assert.match(malformed.courseMessage.textContent, /identifier is not valid/i);
+    assert.match(malformed.courseMessage.textContent, /none has a valid knowledge-graph course ID/i);
     assert.equal(malformed.approve.disabled, true);
 });
 
@@ -752,7 +754,7 @@ test('difficulty selector is present for pending concepts only with the three su
     const elements = createElements();
     const { controller } = createController({ elements, api: {
         async get(path) {
-            if (path === '/kg/courses') return { courses: [{ course_id: COURSE_ID, name: 'Database Concepts' }] };
+            if (path === '/admin/submissions/courses') return { courses: [{ courseId: 1, courseGraphId: COURSE_ID, title: 'Database Concepts' }] };
             if (path === '/admin/submissions/18') return { submission: submission({ status: 'approved' }) };
             if (path === '/admin/submissions/19') return { submission: submission({ submissionType: 'RESOURCE' }) };
             return { submission: submission() };
@@ -815,7 +817,7 @@ test('cancelled confirmation makes no change and duplicate action requests are p
             elements,
             api: {
                 async get(path) {
-                    if (path === '/kg/courses') return { courses: [{ course_id: COURSE_ID, name: 'Database Concepts' }] };
+                    if (path === '/admin/submissions/courses') return { courses: [{ courseId: 1, courseGraphId: COURSE_ID, title: 'Database Concepts' }] };
                     if (path === '/admin/submissions/database-concepts') return { concepts: [] };
                     if (path.includes('?')) return queueResult([], 1, 0, 0);
                     return { success: true, submission: submission() };
@@ -845,7 +847,7 @@ test('approval and rejection failures preserve notes and selected courses', asyn
             elements,
             api: {
                 async get(path) {
-                    if (path === '/kg/courses') return { success: true, courses: [{ course_id: COURSE_ID, name: 'Database Concepts' }] };
+                    if (path === '/admin/submissions/courses') return { success: true, courses: [{ courseId: 1, courseGraphId: COURSE_ID, title: 'Database Concepts' }] };
                     return { success: true, submission: submission() };
                 },
                 async patch() { const error = new Error('One or more selected courses do not exist.'); error.status = 422; throw error; }

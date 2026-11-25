@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -14,7 +15,7 @@
     <div id="admin-dashboard-content" hidden>
         <header>
             <div class="logo-area">
-                <div class="logo-icon">ðŸ§ </div>
+                <div class="logo-icon">🧠</div>
                 <span>NeuroLearn</span>
             </div>
             <div class="nav-links">
@@ -74,46 +75,46 @@
                     <p class="section-subtitle">
                         Review student contributions. Approval and rejection are final; synchronization status, when present, is shown separately from review status.
                     </p>
-                <div class="admin-review-filters">
-                    <label for="admin-review-status-filter">Review status</label>
-                    <select id="admin-review-status-filter">
-                        <option value="pending" selected>Pending</option>
-                        <option value="approved">Approved</option>
-                        <option value="rejected">Rejected</option>
-                        <option value="">All statuses</option>
-                    </select>
-                    <label for="admin-review-type-filter">Submission type</label>
-                    <select id="admin-review-type-filter">
-                        <option value="">All types</option>
-                        <option value="CONCEPT">Concept</option>
-                        <option value="RESOURCE">Learning resource</option>
-                        <option value="PREREQUISITE">Prerequisite</option>
-                        <option value="COURSE">Course</option>
-                    </select>
-                    <button class="btn-outline" id="admin-review-refresh" type="button">Refresh queue</button>
-                </div>
-                <form class="admin-review-detail" id="admin-prerequisite-form" novalidate>
-                    <h2>Manage Database Concept prerequisites</h2>
-                    <p class="admin-review-help">Choose existing approved Database Concepts. The relationship enters the review queue and uses the standard cycle checks and synchronization workflow.</p>
-                    <div id="admin-prerequisite-fields" hidden>
-                        <label for="admin-prerequisite-before">Concept to learn first</label>
-                        <select id="admin-prerequisite-before" required disabled><option value="">Select a Database Concept</option></select>
-                        <label for="admin-prerequisite-after">Concept that depends on it</label>
-                        <select id="admin-prerequisite-after" required disabled><option value="">Select a Database Concept</option></select>
+                    <div class="admin-review-filters">
+                        <label for="admin-review-status-filter">Review status</label>
+                        <select id="admin-review-status-filter">
+                            <option value="pending" selected>Pending</option>
+                            <option value="approved">Approved</option>
+                            <option value="rejected">Rejected</option>
+                            <option value="">All statuses</option>
+                        </select>
+                        <label for="admin-review-type-filter">Submission type</label>
+                        <select id="admin-review-type-filter">
+                            <option value="">All types</option>
+                            <option value="CONCEPT">Concept</option>
+                            <option value="RESOURCE">Learning resource</option>
+                            <option value="PREREQUISITE">Prerequisite</option>
+                            <option value="COURSE">Course</option>
+                        </select>
+                        <button class="btn-outline" id="admin-review-refresh" type="button">Refresh queue</button>
                     </div>
-                    <button class="btn-primary" id="admin-prerequisite-submit" type="submit" disabled>Send prerequisite to review queue</button>
-                    <p class="admin-review-message" id="admin-prerequisite-message" role="status" aria-live="polite"></p>
-                </form>
-                <p class="admin-review-message nl-loading-indicator" id="admin-review-loading" role="status" aria-label="Loading" aria-busy="true" hidden><span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading</span></p>
-                <p class="admin-review-message admin-review-error" id="admin-review-queue-error" role="alert" hidden></p>
-                <p class="admin-review-message" id="admin-review-queue-notice" role="status" aria-live="polite" hidden></p>
-                <p class="admin-review-message" id="admin-review-empty" role="status" hidden>No submissions match these filters.</p>
-                <div class="admin-review-queue" id="admin-review-queue" aria-live="polite"></div>
-                <nav class="admin-review-pagination" aria-label="Administrator submission pages">
-                    <button class="btn-outline" id="admin-review-previous" type="button" disabled>Previous</button>
-                    <span id="admin-review-pagination" aria-live="polite"></span>
-                    <button class="btn-outline" id="admin-review-next" type="button" disabled>Next</button>
-                </nav>
+                    <form class="admin-review-detail" id="admin-prerequisite-form" novalidate>
+                        <h2>Manage Database Concept prerequisites</h2>
+                        <p class="admin-review-help">Choose existing approved Database Concepts. The relationship enters the review queue and uses the standard cycle checks and synchronization workflow.</p>
+                        <div id="admin-prerequisite-fields" hidden>
+                            <label for="admin-prerequisite-before">Concept to learn first</label>
+                            <select id="admin-prerequisite-before" required disabled><option value="">Select a Database Concept</option></select>
+                            <label for="admin-prerequisite-after">Concept that depends on it</label>
+                            <select id="admin-prerequisite-after" required disabled><option value="">Select a Database Concept</option></select>
+                        </div>
+                        <button class="btn-primary" id="admin-prerequisite-submit" type="submit" disabled>Send prerequisite to review queue</button>
+                        <p class="admin-review-message" id="admin-prerequisite-message" role="status" aria-live="polite"></p>
+                    </form>
+                    <p class="admin-review-message nl-loading-indicator" id="admin-review-loading" role="status" aria-label="Loading" aria-busy="true" hidden><span class="nl-spinner" aria-hidden="true"></span><span class="nl-sr-only">Loading</span></p>
+                    <p class="admin-review-message admin-review-error" id="admin-review-queue-error" role="alert" hidden></p>
+                    <p class="admin-review-message" id="admin-review-queue-notice" role="status" aria-live="polite" hidden></p>
+                    <p class="admin-review-message" id="admin-review-empty" role="status" hidden>No submissions match these filters.</p>
+                    <div class="admin-review-queue" id="admin-review-queue" aria-live="polite"></div>
+                    <nav class="admin-review-pagination" aria-label="Administrator submission pages">
+                        <button class="btn-outline" id="admin-review-previous" type="button" disabled>Previous</button>
+                        <span id="admin-review-pagination" aria-live="polite"></span>
+                        <button class="btn-outline" id="admin-review-next" type="button" disabled>Next</button>
+                    </nav>
                 </div>
                 <section class="admin-review-detail" id="admin-review-detail" aria-labelledby="admin-review-detail-title" hidden>
                     <div class="admin-review-detail-heading">
@@ -146,8 +147,8 @@
                             </select>
                         </div>
                         <div class="admin-review-course-field" id="admin-review-course-field" hidden>
-                            <label for="admin-review-courses">Associate concept with the existing Database Concepts course</label>
-                            <p class="admin-review-help">Select the existing Database Concepts course. Courses are not created here.</p>
+                            <label for="admin-review-courses">Associate concept with its course <span aria-hidden="true">*</span></label>
+                            <p class="admin-review-help">Select the existing approved course that this concept belongs to. You can select more than one course if the concept is shared across courses. Courses are not created here.</p>
                             <select id="admin-review-courses" multiple size="5" aria-describedby="admin-review-courses-message"></select>
                             <p class="admin-review-message" id="admin-review-courses-message" role="status" aria-live="polite"></p>
                         </div>

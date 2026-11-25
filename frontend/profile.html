@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Profile - NeuroLearn</title>
+
+    <link rel="stylesheet" href="dashboard.css">
+    <link rel="stylesheet" href="loading-spinner.css">
+    <link rel="stylesheet" href="profile.css">
+</head>
+
+<body>
+    <p class="page-session-message nl-loading-indicator" id="profile-session-message" role="status" aria-label="Loading"
+        aria-busy="true">
+        <span class="nl-spinner" aria-hidden="true"></span>
+        <span class="nl-sr-only">Loading</span>
+    </p>
+
+    <header id="student-header" hidden>
+        <div class="logo-area">
+            <div class="logo-icon">NL</div>
+            <span>NeuroLearn</span>
+        </div>
+
+        <div class="nav-links">
+            <a href="dashboard.html">Dashboard</a>
+            <a href="study.html">Study</a>
+            <a href="quizzes.html">Quizzes</a>
+            <a href="progress.html">Progress</a>
+            <a href="profile.html" class="active" aria-current="page">Profile</a>
+        </div>
+
+        <div class="user-profile">
+            <button class="btn-logout" id="logout-button" type="button">
+                Logout
+            </button>
+        </div>
+    </header>
+
+    <main class="main-container profile-container" id="profile-content" hidden>
+
+        <section class="subheader">
+            <div class="ai-badge">YOUR ACCOUNT</div>
+            <h1>My Profile</h1>
+            <p>View your NeuroLearn account information.</p>
+        </section>
+
+        <section class="profile-card">
+            <div class="profile-avatar" id="profile-avatar">NL</div>
+
+            <div class="profile-heading">
+                <h2 id="profile-username">Loading...</h2>
+                <p id="profile-email">Loading...</p>
+                <span class="profile-role" id="profile-role">Student</span>
+            </div>
+        </section>
+
+        <section class="profile-details-card">
+            <div class="section-title">Account Information</div>
+
+            <div class="profile-details-grid">
+                <div class="profile-detail">
+                    <span>Full Name</span>
+                    <strong id="detail-username">--</strong>
+                </div>
+
+                <div class="profile-detail">
+                    <span>Email Address</span>
+                    <strong id="detail-email">--</strong>
+                </div>
+
+                <div class="profile-detail">
+                    <span>Student Account ID</span>
+                    <strong id="detail-learner-id">--</strong>
+                </div>
+
+                <div class="profile-detail">
+                    <span>Account Role</span>
+                    <strong id="detail-role">--</strong>
+                </div>
+            </div>
+        </section>
+
+        <section class="profile-details-card">
+            <div class="section-title">Edit Profile</div>
+
+            <form id="profile-edit-form">
+                <div class="profile-form-group">
+                    <label for="edit-username">Username</label>
+                    <input type="text" id="edit-username" maxlength="100" required>
+                </div>
+
+                <div class="profile-form-group">
+                    <label for="edit-email">Email Address</label>
+                    <input type="email" id="edit-email" maxlength="255" required>
+                </div>
+
+                <button type="submit" class="profile-save-button">
+                    Save Changes
+                </button>
+
+                <p id="profile-update-message" role="status" hidden></p>
+            </form>
+        </section>
+
+        <section class="profile-details-card">
+            <div class="section-title">Change Password</div>
+
+            <form id="password-change-form">
+
+                <div class="profile-form-group" id="current-password-group">
+                    <label for="current-password">Current Password</label>
+                    <input type="password" id="current-password" autocomplete="current-password" required>
+                </div>
+
+                <div class="profile-form-group">
+                    <label for="new-password">New Password</label>
+                    <input type="password" id="new-password" minlength="8" autocomplete="new-password" required>
+                </div>
+
+                <div class="profile-form-group">
+                    <label for="confirm-password">Confirm New Password</label>
+                    <input type="password" id="confirm-password" minlength="8" autocomplete="new-password" required>
+                </div>
+
+                <button type="submit" id="password-submit-button" class="profile-save-button">
+                    Change Password
+                </button>
+
+                <div id="google-password-reauth" hidden>
+                    <p>
+                        Your account uses Google Sign-In. Verify your Google account
+                        before setting a password.
+                    </p>
+
+                    <div id="google-password-button"></div>
+                </div>
+
+                <p id="password-update-message" role="status" hidden></p>
+
+            </form>
+        </section>
+
+        <div id="profile-error" class="profile-error" hidden></div>
+
+    </main>
+
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script src="config.js"></script>
+    <script src="api.js"></script>
+    <script src="loading-spinner.js"></script>
+    <script src="role-routing.js"></script>
+    <script src="profile.js"></script>
+</body>
+
+</html>

@@ -70,7 +70,7 @@ test('progress counts evidence-based mastered concepts and reports partial evide
     const result = await service.getProgressForLearner({ learnerId: 7, courseId: COURSE_ID });
 
     assert.deepEqual(result, {
-        progress: { percentage: 50, masteredConcepts: 1, totalConcepts: 2 },
+        progress: { percentage: 80, masteredConcepts: 1, totalConcepts: 2 },
         mastery: { percentage: 80, status: 'PROVISIONAL', assessedConcepts: 2, totalConcepts: 2 },
         courseCompletion: { complete: false, masteredConcepts: 1, totalConcepts: 2 },
         prerequisiteEligibility: { eligible: true, prerequisites: [] }
@@ -90,7 +90,7 @@ test('one high provisional assessment does not count as a mastered concept', asy
     const result = await service.getProgressForLearner({ learnerId: 7, courseId: COURSE_ID });
     assert.equal(result.mastery.status, 'PROVISIONAL');
     assert.equal(result.progress.masteredConcepts, 0);
-    assert.equal(result.progress.percentage, 0);
+    assert.equal(result.progress.percentage, 95);
 });
 
 test('only evidence-qualified mastery at or above 85 percent counts toward course progress', async () => {
@@ -108,10 +108,10 @@ test('only evidence-qualified mastery at or above 85 percent counts toward cours
     const result = await service.getProgressForLearner({ learnerId: 7, courseId: COURSE_ID });
     assert.equal(result.progress.masteredConcepts, 1);
     assert.equal(result.progress.totalConcepts, 2);
-    assert.equal(result.progress.percentage, 50);
+    assert.equal(result.progress.percentage, 84.995);
 });
 
-test('course prerequisite eligibility requires evidence-qualified mastery and graph/MySQL closure agreement', async t => {
+test('partial mastery contributes to progress while matseresd concept count retains its evidence threshold', async t => {
     const concepts = [
         { conceptId: 1, conceptName: 'Course target concept', graphCourseId: COURSE_ID },
         { conceptId: 2, conceptName: 'Prerequisite concept', graphCourseId: PREREQUISITE_COURSE_ID }

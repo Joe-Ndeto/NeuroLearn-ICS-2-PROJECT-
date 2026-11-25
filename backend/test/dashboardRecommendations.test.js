@@ -65,7 +65,11 @@ function createDashboardHarness(recommendationResponse, {
     const normalizedRecommendationResponse = {
         ...recommendationResponse,
         concepts: recommendationResponse.concepts || [],
-        coursePrerequisiteEligibility: recommendationResponse.coursePrerequisiteEligibility || { eligible: true, prerequisites: [] }
+        coursePrerequisiteEligibility: recommendationResponse.coursePrerequisiteEligibility || { eligible: true, prerequisites: [] },
+        conceptProgression: recommendationResponse.conceptProgression || {
+            progressionThreshold: 80,
+            concepts: []
+        }
     };
     const window = {
         NeuroLearnApi: {

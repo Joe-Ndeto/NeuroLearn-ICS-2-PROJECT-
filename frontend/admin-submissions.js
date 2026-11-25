@@ -338,35 +338,74 @@
 
         async function loadCourses({ force = false } = {}) {
             if (!force && elements.courses.dataset.loaded === 'true') return;
+
             elements.courseField.hidden = false;
             elements.courses.disabled = true;
             elements.courses.dataset.loaded = 'false';
-            if (root.NeuroLearnLoading?.showIndicator) root.NeuroLearnLoading.showIndicator(elements.courseMessage, 'Loading existing courses');
-            else setMessage(elements.courseMessage, '', 'info');
+
+            if (root.NeuroLearnLoading?.showIndicator) {
+                root.NeuroLearnLoading.showIndicator(
+                    elements.courseMessage,
+                    'Loading approved courses'
+                );
+            } else {
+                setMessage(elements.courseMessage, '', 'info');
+            }
+
             try {
-                const result = await api.get('/kg/courses', { cache: 'no-store' });
-                if (!Array.isArray(result?.courses)) throw new Error('invalid_response');
-                const availableCourses = [...result.courses];
-                const namedDomainCourses = availableCourses.filter(isDatabaseConceptsCourse);
-                const domainCourses = namedDomainCourses.filter(hasValidCourseId);
-                const count = populateCourseSelect(elements.courses, domainCourses, document);
+                // Load only administrator-approved canonical courses.
+                // This excludes graph-only courses that have not been approved.
+                const result = await api.get(
+                    '/admin/submissions/courses',
+                    { cache: 'no-store' }
+                );
+
+                if (!Array.isArray(result?.courses)) {
+                    throw new Error('invalid_response');
+                }
+
+                const approvedCourses = result.courses
+                    .filter(course =>
+                        course &&
+                        typeof course.courseGraphId === 'string'
+                    )
+                    .map(course => ({
+                        course_id: course.courseGraphId,
+                        name: course.title
+                    }))
+                    .filter(hasValidCourseId);
+
+                const count = populateCourseSelect(
+                    elements.courses,
+                    approvedCourses,
+                    document
+                );
+
                 if (!count) {
-                    const message = namedDomainCourses.length > 0
-                        ? 'Database Concepts course exists but its identifier is not valid for approval. Keep this course unchanged and contact the system administrator.'
-                        : result.courses.length === 0
-                        ? 'No courses are available. Use Manage Database Concepts course above to provision the required course.'
-                        : 'Database Concepts course not found. Use Manage Database Concepts course above to create or select it.';
+                    const message = result.courses.length === 0
+                        ? 'No approved courses are available yet. Approve a course proposal first.'
+                        : 'Approved courses were found, but none has a valid knowledge-graph course ID. Check course synchronization before approving this concept.';
+
                     setMessage(elements.courseMessage, message, 'error');
                 } else {
                     elements.courses.dataset.loaded = 'true';
-                    setMessage(elements.courseMessage, 'Select the existing Database Concepts course for this concept.', 'info');
+
+                    setMessage(
+                        elements.courseMessage,
+                        'Select one or more approved courses to associate with this concept.',
+                        'info'
+                    );
                 }
             } catch (error) {
-                setMessage(elements.courseMessage, `${errorMessage(error, 'Course lookup failed.')} Use Refresh queue or reopen this submission to retry the lookup.`, 'error');
+                setMessage(
+                    elements.courseMessage,
+                    `${errorMessage(error, 'Approved course lookup failed.')} Refresh the queue or reopen this submission to retry.`,
+                    'error'
+                );
             }
+
             updateActionAvailability();
         }
-
         let domainConceptsLoaded = false;
         let domainConceptsLoading = null;
         let domainConceptCount = 0;

@@ -254,7 +254,7 @@ test('resource button follows title and file changes, locks during upload, prese
 test('student contribution form keeps course proposals, selected resource course/concept and no student prerequisite controls', () => {
     const html = fs.readFileSync(path.join(__dirname, '../../frontend/dashboard.html'), 'utf8');
     const script = fs.readFileSync(path.join(__dirname, '../../frontend/knowledge-contributions.js'), 'utf8');
-    assert.match(html, /Suggest a Database Concept/);
+    assert.match(html, /Suggest a Course Concept/);
     assert.match(html, /administrator approval is required/i);
     assert.match(html, /id="resource-course"/);
     assert.match(html, /id="resource-concept"/);

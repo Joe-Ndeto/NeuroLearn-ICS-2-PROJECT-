@@ -196,8 +196,8 @@ test('quiz course selection is required and submitted explicitly; learner progre
     const backendRoot = path.join(__dirname, '../src');
     const appSource = fs.readFileSync(path.join(backendRoot, 'app.js'), 'utf8');
     const progressRoute = fs.readFileSync(path.join(backendRoot, 'routes/learnerProgress.js'), 'utf8');
-    assert.match(studyHtml, /id="quiz-course" required/);
-    assert.match(studyHtml, /Choose the course that matches your learning material/);
+    assert.match(studyHtml, /id="quiz-course"\s+required/);
+    assert.match(studyHtml, /Choose the course that matches your learning\s+material/);
     assert.match(studyJs, /api\.get\('\/submissions\/resource-options'\)/);
     assert.match(studyJs, /conceptId: Number\(selected\.concept_id\)/);
     assert.match(studyJs, /courseId,\s*conceptId:\s*Number\(selected\.concept_id\)/);

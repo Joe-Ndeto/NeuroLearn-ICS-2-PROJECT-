@@ -246,7 +246,10 @@ function createLearnerProgressService({ mysql: injectedMysql = null, asOf = () =
                     : 'PROVISIONAL';
             const progressPercentage = targetConceptIds.size === 0
                 ? 0
-                : Number(((masteredConcepts / targetConceptIds.size) * 100).toFixed(4));
+                : Number((
+                    results.reduce((sum, item) => sum + (item.mastery.mastery ?? 0), 0) /
+                    targetConceptIds.size
+                ).toFixed(4));
 
             await connection.commit();
             transactionStarted = false;
