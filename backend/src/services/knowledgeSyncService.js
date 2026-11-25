@@ -50,6 +50,12 @@ function createKnowledgeSyncService({
     };
 
     async function claimTasks(limit = settings.batchSize) {
+        const requestedLimit = Number(limit);
+        const safeLimit =
+            Number.isSafeInteger(requestedLimit) && requestedLimit > 0
+                ? requestedLimit
+                : settings.batchSize;
+
         const connection = await mysql.getConnection();
         let transactionStarted = false;
         let connectionReusable = true;
@@ -71,9 +77,9 @@ function createKnowledgeSyncService({
                          AND lease_expires_at IS NOT NULL
                          AND lease_expires_at <= CURRENT_TIMESTAMP))
                  ORDER BY outbox_id
-                 LIMIT ?
+                 LIMIT ${safeLimit}
                  FOR UPDATE SKIP LOCKED`,
-                [settings.maxAttempts, limit]
+                [settings.maxAttempts]
             );
 
             for (const row of exhaustedRows) {
@@ -119,9 +125,9 @@ function createKnowledgeSyncService({
                          AND lease_expires_at IS NOT NULL
                          AND lease_expires_at <= CURRENT_TIMESTAMP))
                  ORDER BY outbox_id
-                 LIMIT ?
+                 LIMIT ${safeLimit}
                  FOR UPDATE SKIP LOCKED`,
-                [settings.maxAttempts, limit]
+                [settings.maxAttempts]
             );
 
             const claimed = [];
