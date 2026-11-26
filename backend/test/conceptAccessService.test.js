@@ -19,6 +19,8 @@ function createServiceResult(overrides = {}) {
             {
                 conceptId: 1,
                 conceptName: 'Introduction',
+                sequence: 1,
+                quizPassed: true,
                 mastery: 90,
                 evidenceStatus: 'EVIDENCE_QUALIFIED',
                 assessmentCount: 2,
@@ -27,6 +29,8 @@ function createServiceResult(overrides = {}) {
             {
                 conceptId: 2,
                 conceptName: 'Advanced Concepts',
+                sequence: 2,
+                quizPassed: false,
                 mastery: null,
                 evidenceStatus: 'UNKNOWN',
                 assessmentCount: 0,
@@ -64,7 +68,7 @@ function createAccessService(result = createServiceResult()) {
     return { service, calls };
 }
 
-test('concept without prerequisites is unlocked', async () => {
+test('first concept without prerequisites is unlocked', async () => {
     const { service } = createAccessService();
 
     const result = await service.getConceptAccessForLearner({
@@ -77,6 +81,65 @@ test('concept without prerequisites is unlocked', async () => {
     assert.equal(result.status, 'UNLOCKED');
     assert.equal(result.reason, null);
     assert.equal(result.revisionTarget, null);
+});
+
+test('second concept is locked until previous topic quiz is passed', async () => {
+    const resultData = createServiceResult();
+
+    resultData.concepts[0].quizPassed = false;
+
+    const { service } = createAccessService(resultData);
+
+    const result = await service.getConceptAccessForLearner({
+        learnerId: 10,
+        courseId: COURSE_ID,
+        conceptId: 2
+    });
+
+    assert.equal(result.accessible, false);
+    assert.equal(result.status, 'LOCKED');
+    assert.equal(result.reason, 'PREVIOUS_TOPIC_NOT_PASSED');
+    assert.deepEqual(result.revisionTarget, {
+        conceptId: 1,
+        conceptName: 'Introduction'
+    });
+});
+
+test('second concept unlocks after previous topic quiz is passed', async () => {
+    const resultData = createServiceResult();
+
+    resultData.concepts[0].quizPassed = true;
+
+    const { service } = createAccessService(resultData);
+
+    const result = await service.getConceptAccessForLearner({
+        learnerId: 10,
+        courseId: COURSE_ID,
+        conceptId: 2
+    });
+
+    assert.equal(result.accessible, true);
+    assert.equal(result.status, 'UNLOCKED');
+    assert.equal(result.reason, null);
+});
+
+test('a previous quiz pass remains valid after a later failed attempt', async () => {
+    const resultData = createServiceResult();
+
+    // Represents historical quiz evidence: at least one attempt passed.
+    // A later failed attempt must not erase that pass.
+    resultData.concepts[0].quizPassed = true;
+
+    const { service } = createAccessService(resultData);
+
+    const result = await service.getConceptAccessForLearner({
+        learnerId: 10,
+        courseId: COURSE_ID,
+        conceptId: 2
+    });
+
+    assert.equal(result.accessible, true);
+    assert.equal(result.status, 'UNLOCKED');
 });
 
 test('concept is locked when prerequisite mastery is below 80%', async () => {

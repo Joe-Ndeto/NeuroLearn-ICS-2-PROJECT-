@@ -311,8 +311,8 @@ async function getAdminSubmissions({ status, type, syncStatus, limit, offset }) 
     const [rows] = await mysql.execute(
         `${ADMIN_SUBMISSION_SELECT}${whereClause}
          ORDER BY s.submitted_at DESC, s.submission_id DESC
-         LIMIT ${safeLimit} OFFSET ${safeOffset}`,
-        values
+         LIMIT ? OFFSET ?`,
+        [...values, safeLimit, safeOffset]
     );
 
     return {

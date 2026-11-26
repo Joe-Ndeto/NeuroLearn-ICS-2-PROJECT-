@@ -253,14 +253,16 @@ function createConceptAccessService({
         const courseEligible = result.coursePrerequisiteEligibility.eligible;
         const seenConceptIds = new Set();
 
-        const concepts = result.concepts.map(concept => {
+
+        const concepts = result.concepts.map((concept, index) => {
             if (
                 !concept ||
                 !Number.isSafeInteger(concept.conceptId) ||
                 concept.conceptId < 1 ||
                 typeof concept.conceptName !== 'string' ||
                 !concept.conceptName.trim() ||
-                !Array.isArray(concept.prerequisites)
+                !Array.isArray(concept.prerequisites) ||
+                typeof concept.quizPassed !== 'boolean'
             ) {
                 throw new ConceptAccessError(
                     'INVALID_PROGRESS_DATA',
@@ -268,16 +270,8 @@ function createConceptAccessService({
                 );
             }
 
-            if (seenConceptIds.has(concept.conceptId)) {
-                throw new ConceptAccessError(
-                    'INVALID_PROGRESS_DATA',
-                    'Duplicate concepts were returned for the selected course.'
-                );
-            }
-
-            seenConceptIds.add(concept.conceptId);
-
             const conceptName = concept.conceptName.trim();
+
             const mastery = validateMastery(concept.mastery, conceptName);
             const evidenceStatus = validateEvidenceStatus(
                 concept.evidenceStatus,
@@ -312,6 +306,9 @@ function createConceptAccessService({
                 item => !item.satisfied
             );
 
+            const previousConcept = index > 0 ? result.concepts[index - 1] : null;
+            const previousTopicPassed = !previousConcept || previousConcept.quizPassed === true;
+
             let accessible = true;
             let status = 'UNLOCKED';
             let reason = null;
@@ -323,6 +320,16 @@ function createConceptAccessService({
                 status = 'LOCKED';
                 reason = 'COURSE_PREREQUISITE_REQUIRED';
                 message = 'Complete the required prerequisite course before accessing this concept.';
+            } else if (!previousTopicPassed) {
+                accessible = false;
+                status = 'LOCKED';
+                reason = 'PREVIOUS_TOPIC_NOT_PASSED';
+                message = `Pass the quiz for ${previousConcept.conceptName} with at least ${PREREQUISITE_THRESHOLD}% before continuing.`;
+
+                revisionTarget = {
+                    conceptId: previousConcept.conceptId,
+                    conceptName: previousConcept.conceptName
+                };
             } else if (unsatisfiedPrerequisites.length > 0) {
                 accessible = false;
                 status = 'LOCKED';
@@ -340,6 +347,8 @@ function createConceptAccessService({
             }
 
             return {
+                sequence: concept.sequence ?? index + 1,
+                quizPassed: concept.quizPassed,
                 conceptId: concept.conceptId,
                 conceptName,
                 mastery,

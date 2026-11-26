@@ -258,11 +258,13 @@ function createRecommendationService({
 
             const [candidateRows] = await connection.execute(
                 `SELECT c.concept_id AS conceptId, c.concept_name AS conceptName,
-                        c.graph_concept_id AS graphConceptId, cc.course_graph_id AS courseGraphId
-                 FROM concept AS c
-                 INNER JOIN concept_course AS cc ON cc.concept_id = c.concept_id
-                 WHERE cc.course_graph_id = ?
-                 ORDER BY c.concept_id`,
+                        c.graph_concept_id AS graphConceptId,
+                        cc.course_graph_id AS courseGraphId,
+                        cc.created_at AS uploadedAt
+                FROM concept AS c
+                INNER JOIN concept_course AS cc ON cc.concept_id = c.concept_id
+                WHERE cc.course_graph_id = ?
+                ORDER BY cc.created_at ASC, c.concept_id ASC`,
                 [courseId]
             );
             const [courseRows] = await connection.execute(
@@ -335,7 +337,7 @@ function createRecommendationService({
                 }
             }
 
-            const candidates = candidateRows.map(row => {
+            const candidates = candidateRows.map((row, index) => {
                 const conceptId = positiveInteger(row.conceptId, 'candidate concept ID');
                 const canonical = conceptsById.get(conceptId);
                 if (!canonical || typeof row.conceptName !== 'string' ||
@@ -346,7 +348,12 @@ function createRecommendationService({
                 if (canonical.graphConceptId !== graphId || conceptIdByGraphId.get(graphId) !== conceptId) {
                     throw new RecommendationServiceError('MISSING_CANONICAL_MAPPING', 'A candidate has no unique graph mapping.', 503);
                 }
-                return { ...canonical, graphConceptId: graphId };
+                return {
+                    ...canonical,
+                    graphConceptId: graphId,
+                    sequence: index + 1,
+                    uploadedAt: row.uploadedAt ?? null
+                };
             });
             if (new Set(candidates.map(candidate => candidate.conceptId)).size !== candidates.length ||
                 new Set(candidates.map(candidate => candidate.graphConceptId)).size !== candidates.length) {
@@ -358,7 +365,7 @@ function createRecommendationService({
             const relevantConceptIds = new Set();
             const relevantPrerequisiteRowIds = new Set();
             for (const candidate of candidates) {
-                                relevantConceptIds.add(candidate.conceptId);
+                relevantConceptIds.add(candidate.conceptId);
                 const closure = getCanonicalClosure(candidate.conceptId, incoming);
                 canonicalClosures.set(candidate.conceptId, closure.ancestors);
                 for (const conceptId of closure.ancestors) relevantConceptIds.add(conceptId);
@@ -538,7 +545,7 @@ function createRecommendationService({
                 throw new RecommendationServiceError('INVALID_PREREQUISITE_GRAPH', 'Prerequisite graph data is invalid.', 503);
             }
             graphClosures.set(closure.candidateGraphId, new Set(closure.prerequisiteGraphIds));
-                    }
+        }
         if (graphClosures.size !== snapshot.candidates.length) {
             throw new RecommendationServiceError('MISSING_CANDIDATE_NODE', 'A candidate concept is missing from the knowledge graph.', 503);
         }
@@ -636,6 +643,9 @@ function createRecommendationService({
             return {
                 conceptId: candidate.conceptId,
                 conceptName: candidate.conceptName,
+                sequence: candidate.sequence,
+                uploadedAt: candidate.uploadedAt,
+                quizPassed: observations.some(observation => observation.score >= 80),
                 mastery: mastery.mastery,
                 evidenceStatus: mastery.evidenceStatus,
                 prerequisites,
@@ -662,6 +672,9 @@ function createRecommendationService({
         const concepts = candidateInputs.map(candidate => ({
             conceptId: candidate.conceptId,
             conceptName: candidate.conceptName,
+            sequence: candidate.sequence,
+            uploadedAt: candidate.uploadedAt,
+            quizPassed: candidate.quizPassed,
             mastery: candidate.mastery,
             evidenceStatus: candidate.evidenceStatus,
             assessmentCount: candidate.assessmentHistory.length,
