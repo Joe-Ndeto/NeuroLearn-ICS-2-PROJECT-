@@ -105,17 +105,20 @@
                         <button class="btn-outline" id="admin-review-refresh" type="button">Refresh queue</button>
                     </div>
                     <form class="admin-review-detail" id="admin-prerequisite-form" novalidate>
-                        <h2>Manage Database Concept prerequisites</h2>
-                        <p class="admin-review-help">Choose existing approved Database Concepts. The relationship enters
-                            the review queue and uses the standard cycle checks and synchronization workflow.</p>
+                        <h2>Manage Course Concept Prerequisites</h2>
+                        <p class="admin-review-help">
+                            Choose two approved concepts from the available courses. The first concept
+                            must be learned before the second. The relationship enters the review queue
+                            and uses the standard cycle checks and synchronization workflow.
+                        </p>
                         <div id="admin-prerequisite-fields" hidden>
                             <label for="admin-prerequisite-before">Concept to learn first</label>
                             <select id="admin-prerequisite-before" required disabled>
-                                <option value="">Select a Database Concept</option>
+                                <option value="">Select an Approved Course Concept</option>
                             </select>
                             <label for="admin-prerequisite-after">Concept that depends on it</label>
                             <select id="admin-prerequisite-after" required disabled>
-                                <option value="">Select a Database Concept</option>
+                                <option value="">Select an Approved Course Concept</option>
                             </select>
                         </div>
                         <button class="btn-primary" id="admin-prerequisite-submit" type="submit" disabled>Send

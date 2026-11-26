@@ -409,9 +409,14 @@
         let domainConceptsLoaded = false;
         let domainConceptsLoading = null;
         let domainConceptCount = 0;
+
+        let prerequisiteConceptsLoaded = false;
+        let prerequisiteConceptsLoading = null;
+        let prerequisiteConceptCount = 0;
         let prerequisitePending = false;
+
         function updatePrerequisiteAvailability() {
-            const hasEnoughConcepts = domainConceptCount >= 2;
+            const hasEnoughConcepts = prerequisiteConceptCount >= 2;
             if (elements.prerequisiteFields) elements.prerequisiteFields.hidden = !hasEnoughConcepts;
             if (elements.prerequisiteBefore) elements.prerequisiteBefore.disabled = !hasEnoughConcepts || prerequisitePending;
             if (elements.prerequisiteAfter) elements.prerequisiteAfter.disabled = !hasEnoughConcepts || prerequisitePending;
@@ -422,19 +427,96 @@
                     !before || !after || before === after;
             }
         }
+
+        async function loadPrerequisiteConcepts({ force = false } = {}) {
+            if (prerequisiteConceptsLoaded && !force) {
+                updatePrerequisiteAvailability();
+                return prerequisiteConceptCount >= 2;
+            }
+            if (prerequisiteConceptsLoading) return prerequisiteConceptsLoading;
+
+            prerequisiteConceptsLoading = (async () => {
+                try {
+                    if (elements.prerequisiteMessage) {
+                        setMessage(elements.prerequisiteMessage, 'Loading approved course concepts...', 'info');
+                    }
+
+                    const result = await api.get('/admin/submissions/approved-course-concepts');
+                    if (!Array.isArray(result?.courses)) {
+                        throw new Error('Invalid approved course concepts response.');
+                    }
+
+                    const allConcepts = result.courses.flatMap(course =>
+                        (Array.isArray(course.concepts) ? course.concepts : []).map(concept => ({
+                            conceptId: concept.conceptId,
+                            name: concept.name,
+                            courseName: course.name
+                        }))
+                    );
+                    const uniqueConcepts = [
+                        ...new Map(allConcepts.map(concept => [String(concept.conceptId), concept])).values()
+                    ];
+
+                    for (const select of [elements.prerequisiteBefore, elements.prerequisiteAfter]) {
+                        if (!select) continue;
+                        const placeholder = document.createElement('option');
+                        placeholder.value = '';
+                        placeholder.textContent = 'Select an approved course concept';
+                        placeholder.disabled = true;
+                        placeholder.selected = true;
+                        const options = uniqueConcepts.map(concept => {
+                            const option = document.createElement('option');
+                            option.value = String(concept.conceptId);
+                            option.textContent = `${safeText(concept.name, 'Concept')} — ${safeText(concept.courseName, 'Course')}`;
+                            return option;
+                        });
+                        select.replaceChildren(placeholder, ...options);
+                        select.value = '';
+                    }
+
+                    prerequisiteConceptCount = uniqueConcepts.length;
+                    prerequisiteConceptsLoaded = true;
+                    if (elements.prerequisiteMessage) {
+                        setMessage(elements.prerequisiteMessage,
+                            prerequisiteConceptCount < 2
+                                ? 'At least two approved course concepts must exist before prerequisites can be created.'
+                                : '', 'info');
+                    }
+                    return prerequisiteConceptCount >= 2;
+                } catch (error) {
+                    prerequisiteConceptCount = 0;
+                    prerequisiteConceptsLoaded = false;
+                    if (elements.prerequisiteMessage) {
+                        setMessage(elements.prerequisiteMessage,
+                            errorMessage(error, 'Approved course concepts could not be loaded.'), 'error');
+                    }
+                    return false;
+                } finally {
+                    prerequisiteConceptsLoading = null;
+                    updatePrerequisiteAvailability();
+                }
+            })();
+            return prerequisiteConceptsLoading;
+        }
+
         async function loadDatabaseConcepts({ force = false } = {}) {
             if (domainConceptsLoaded && !force) {
                 if (elements.resourceConcept) elements.resourceConcept.disabled = domainConceptCount === 0;
-                updatePrerequisiteAvailability();
                 return domainConceptCount > 0;
             }
-            if (domainConceptsLoading) return domainConceptsLoading;
-            const selects = [elements.resourceConcept, elements.prerequisiteBefore, elements.prerequisiteAfter].filter(Boolean);
-            if (!selects.length) return false;
-            if (root.NeuroLearnLoading?.showIndicator) {
-                if (elements.resourceConceptMessage) root.NeuroLearnLoading.showIndicator(elements.resourceConceptMessage, 'Loading approved concepts');
-                if (elements.prerequisiteMessage) root.NeuroLearnLoading.showIndicator(elements.prerequisiteMessage, 'Loading approved concepts');
+            if (domainConceptsLoading) {
+                if (!force) return domainConceptsLoading;
+
+                return domainConceptsLoading.then(() =>
+                    loadDatabaseConcepts({ force: true })
+                );
             }
+            if (!elements.resourceConcept) return false;
+
+            if (root.NeuroLearnLoading?.showIndicator && elements.resourceConceptMessage) {
+                root.NeuroLearnLoading.showIndicator(elements.resourceConceptMessage, 'Loading approved Database Concepts');
+            }
+
             domainConceptsLoading = (async () => {
                 try {
                     const submittedResource = selectedSubmission?.submissionType === 'RESOURCE'
@@ -442,49 +524,51 @@
                         : null;
                     const hasSubmittedAssociation = submittedResource?.document &&
                         submittedResource.courseId && submittedResource.conceptId != null;
+
                     const domainResult = await api.get('/admin/submissions/database-concepts');
                     const resourceResult = hasSubmittedAssociation
                         ? await api.get(`/admin/submissions/courses/${encodeURIComponent(submittedResource.courseId)}/concepts`)
                         : domainResult;
-                    if (!Array.isArray(domainResult?.concepts) || !Array.isArray(resourceResult?.concepts)) throw new Error('invalid_response');
+
+                    if (!Array.isArray(domainResult?.concepts) || !Array.isArray(resourceResult?.concepts)) {
+                        throw new Error('Invalid Database Concepts response.');
+                    }
+
                     const resourceConceptId = hasSubmittedAssociation ? String(submittedResource.conceptId) : null;
                     const availableConcepts = hasSubmittedAssociation
                         ? resourceResult.concepts.filter(concept => String(concept.concept_id) === resourceConceptId)
                         : domainResult.concepts;
-                    for (const select of selects) {
-                        const placeholder = document.createElement('option');
-                        placeholder.value = '';
-                        placeholder.textContent = 'Select an approved concept';
-                        placeholder.disabled = true;
-                        placeholder.selected = true;
-                        const options = (select === elements.resourceConcept ? availableConcepts : domainResult.concepts).map(concept => {
-                            const option = document.createElement('option');
-                            option.value = String(concept.concept_id);
-                            option.textContent = `${safeText(concept.name, 'Concept')} (${concept.concept_id})`;
-                            return option;
-                        });
-                        select.replaceChildren(placeholder, ...options);
-                        select.value = '';
-                        select.disabled = options.length === 0;
-                    }
+
+                    const select = elements.resourceConcept;
+                    const placeholder = document.createElement('option');
+                    placeholder.value = '';
+                    placeholder.textContent = 'Select an approved Database Concept';
+                    placeholder.disabled = true;
+                    placeholder.selected = true;
+                    const options = availableConcepts.map(concept => {
+                        const option = document.createElement('option');
+                        option.value = String(concept.concept_id);
+                        option.textContent = `${safeText(concept.name, 'Concept')} (${concept.concept_id})`;
+                        return option;
+                    });
+                    select.replaceChildren(placeholder, ...options);
+                    select.value = '';
+                    select.disabled = options.length === 0;
+
                     domainConceptCount = domainResult.concepts.length;
                     domainConceptsLoaded = true;
-                    updatePrerequisiteAvailability();
-                    if (elements.prerequisiteMessage) setMessage(elements.prerequisiteMessage,
-                        domainResult.concepts.length < 2
-                            ? 'At least two approved Database Concepts must exist before prerequisites can be created.'
-                            : '', 'info');
+
+                    let emptyMessage = hasSubmittedAssociation
+                        ? 'The submitted course and concept association is no longer available. Reject this resource or restore the approved association before retrying.'
+                        : 'No approved Database Concepts are available yet. Approve a concept first.';
+                    if (domainResult.domainAvailable === false || domainResult.emptyReason === 'course_missing') {
+                        emptyMessage = 'The Database Concepts course is unavailable. Use Manage Database Concepts course above, then retry.';
+                    } else if (domainResult.emptyReason === 'missing_course_association') {
+                        emptyMessage = 'Approved concepts exist, but none are associated with the Database Concepts course. Review the course association before approving resources.';
+                    } else if (domainResult.emptyReason === 'missing_graph_concept_id') {
+                        emptyMessage = 'Database Concepts are associated with the course, but their graph concept IDs are missing. Resolve the concept mapping before approving resources.';
+                    }
                     if (elements.resourceConceptMessage) {
-                        let emptyMessage = hasSubmittedAssociation
-                            ? 'The submitted course and concept association is no longer available. Reject this resource or restore the approved association before retrying.'
-                            : 'No approved Database Concepts are available yet. Approve a concept first.';
-                        if (domainResult.domainAvailable === false || domainResult.emptyReason === 'course_missing') {
-                            emptyMessage = 'The Database Concepts course is unavailable. Use Manage Database Concepts course above, then retry.';
-                        } else if (domainResult.emptyReason === 'missing_course_association') {
-                            emptyMessage = 'Approved concepts exist, but none are associated with the Database Concepts course. Review the course association before approving resources.';
-                        } else if (domainResult.emptyReason === 'missing_graph_concept_id') {
-                            emptyMessage = 'Database Concepts are associated with the course, but their graph concept IDs are missing. Resolve the concept mapping before approving resources.';
-                        }
                         setMessage(elements.resourceConceptMessage,
                             availableConcepts.length
                                 ? hasSubmittedAssociation
@@ -495,14 +579,15 @@
                     }
                     return availableConcepts.length > 0;
                 } catch (error) {
-                    if (elements.resourceConceptMessage) setMessage(elements.resourceConceptMessage,
-                        'Concept lookup failed. Check database and course availability, then reopen this submission to retry.', 'error');
+                    domainConceptsLoaded = false;
                     domainConceptCount = 0;
-                    if (elements.prerequisiteMessage) setMessage(elements.prerequisiteMessage, errorMessage(error, 'Database Concepts could not be loaded.'), 'error');
+                    if (elements.resourceConceptMessage) {
+                        setMessage(elements.resourceConceptMessage,
+                            'Concept lookup failed. Check database and course availability, then reopen this submission to retry.', 'error');
+                    }
                     return false;
                 } finally {
                     domainConceptsLoading = null;
-                    updatePrerequisiteAvailability();
                     updateActionAvailability();
                 }
             })();
@@ -634,7 +719,10 @@
                 const successMessage = status === 'approved' ? 'Submission approved.' : 'Submission rejected.';
                 setMessage(elements.queueNotice, successMessage, 'success');
                 if (status === 'approved' && selectedSubmission.submissionType === 'CONCEPT') {
-                    await loadDatabaseConcepts({ force: true });
+                    await Promise.all([
+                        loadDatabaseConcepts({ force: true }),
+                        loadPrerequisiteConcepts({ force: true })
+                    ]);
                 }
                 await backToQueue();
             } catch (error) {
@@ -669,7 +757,7 @@
             elements.prerequisiteForm.addEventListener('submit', async event => {
                 event.preventDefault();
                 if (elements.prerequisiteSubmit.disabled || !elements.prerequisiteBefore.value || !elements.prerequisiteAfter.value) {
-                    setMessage(elements.prerequisiteMessage, 'Select two Database Concepts.', 'error');
+                    setMessage(elements.prerequisiteMessage, 'Select two Approved Course Concepts.', 'error');
                     return;
                 }
                 if (elements.prerequisiteBefore.value === elements.prerequisiteAfter.value) {
@@ -700,7 +788,7 @@
                     updatePrerequisiteAvailability();
                 }
             });
-            loadDatabaseConcepts();
+            loadPrerequisiteConcepts();
         }
 
         if (windowRef?.addEventListener) windowRef.addEventListener('popstate', restoreRoute);
@@ -715,286 +803,286 @@
         };
     }
 
-function initializeCourseManagement({ document, api }) {
-    const section = document.getElementById('admin-course-management');
-    if (!section || !api.isAdministrator()) return null;
+    function initializeCourseManagement({ document, api }) {
+        const section = document.getElementById('admin-course-management');
+        if (!section || !api.isAdministrator()) return null;
 
-    const get = id => document.getElementById(id);
-    const courseSelect = get('admin-course-select');
-    const title = get('admin-course-title');
-    const description = get('admin-course-description');
-    const difficulty = get('admin-course-difficulty');
-    const editForm = get('admin-course-edit-form');
-    const save = get('admin-course-save');
-    const prerequisiteSelect = get('admin-course-prerequisite-select');
-    const add = get('admin-course-prerequisite-add');
-    const list = get('admin-course-prerequisite-list');
-    const conceptList = get('admin-course-concept-list');
-    const message = get('admin-course-management-message');
+        const get = id => document.getElementById(id);
+        const courseSelect = get('admin-course-select');
+        const title = get('admin-course-title');
+        const description = get('admin-course-description');
+        const difficulty = get('admin-course-difficulty');
+        const editForm = get('admin-course-edit-form');
+        const save = get('admin-course-save');
+        const prerequisiteSelect = get('admin-course-prerequisite-select');
+        const add = get('admin-course-prerequisite-add');
+        const list = get('admin-course-prerequisite-list');
+        const conceptList = get('admin-course-concept-list');
+        const message = get('admin-course-management-message');
 
-    let courses = [];
-    let pending = false;
+        let courses = [];
+        let pending = false;
 
-    const selected = () =>
-        courses.find(course => String(course.courseId) === courseSelect.value) || null;
+        const selected = () =>
+            courses.find(course => String(course.courseId) === courseSelect.value) || null;
 
-    const option = (value, text) => {
-        const item = document.createElement('option');
-        item.value = String(value);
-        item.textContent = String(text);
-        return item;
-    };
+        const option = (value, text) => {
+            const item = document.createElement('option');
+            item.value = String(value);
+            item.textContent = String(text);
+            return item;
+        };
 
-    const show = (text, state = 'info') => {
-        message.textContent = text;
-        message.dataset.state = state;
-        message.hidden = !text;
-    };
+        const show = (text, state = 'info') => {
+            message.textContent = text;
+            message.dataset.state = state;
+            message.hidden = !text;
+        };
 
-    const updateButtons = () => {
-        const course = selected();
+        const updateButtons = () => {
+            const course = selected();
 
-        save.disabled = pending || !course || !title.value.trim() || !difficulty.value;
+            save.disabled = pending || !course || !title.value.trim() || !difficulty.value;
 
-        add.disabled = pending ||
-            !course ||
-            !prerequisiteSelect.value ||
-            prerequisiteSelect.value === courseSelect.value;
-    };
+            add.disabled = pending ||
+                !course ||
+                !prerequisiteSelect.value ||
+                prerequisiteSelect.value === courseSelect.value;
+        };
 
-    function renderSelected() {
-        const course = selected();
+        function renderSelected() {
+            const course = selected();
 
-        title.value = course?.title || '';
-        description.value = course?.description || '';
-        difficulty.value = course?.difficultyLevel || '';
+            title.value = course?.title || '';
+            description.value = course?.description || '';
+            difficulty.value = course?.difficultyLevel || '';
 
-        list.replaceChildren();
+            list.replaceChildren();
 
-        for (const prerequisite of course?.prerequisites || []) {
-            const row = document.createElement('p');
+            for (const prerequisite of course?.prerequisites || []) {
+                const row = document.createElement('p');
 
-            row.append(
-                document.createTextNode(
-                    `${prerequisite.title} must be completed first. `
-                )
-            );
+                row.append(
+                    document.createTextNode(
+                        `${prerequisite.title} must be completed first. `
+                    )
+                );
 
-            const remove = document.createElement('button');
-            remove.type = 'button';
-            remove.className = 'btn-outline';
-            remove.textContent = 'Remove';
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'btn-outline';
+                remove.textContent = 'Remove';
 
-            remove.addEventListener('click', () => {
-                changePrerequisite(prerequisite.courseId, 'remove');
-            });
+                remove.addEventListener('click', () => {
+                    changePrerequisite(prerequisite.courseId, 'remove');
+                });
 
-            row.append(remove);
-            list.append(row);
-        }
+                row.append(remove);
+                list.append(row);
+            }
 
-        if (conceptList) {
-            conceptList.replaceChildren();
+            if (conceptList) {
+                conceptList.replaceChildren();
 
-            const concepts = course?.concepts || [];
+                const concepts = course?.concepts || [];
 
-            if (!concepts.length) {
-                const empty = document.createElement('p');
-                empty.textContent = 'No concepts are assigned to this course yet.';
-                conceptList.append(empty);
-            } else {
-                for (const concept of concepts) {
-                    const item = document.createElement('p');
-                    item.textContent = concept.name;
-                    conceptList.append(item);
+                if (!concepts.length) {
+                    const empty = document.createElement('p');
+                    empty.textContent = 'No concepts are assigned to this course yet.';
+                    conceptList.append(empty);
+                } else {
+                    for (const concept of concepts) {
+                        const item = document.createElement('p');
+                        item.textContent = concept.name;
+                        conceptList.append(item);
+                    }
                 }
             }
-        }
 
-        updateButtons();
-    }
-
-    async function loadCourseConcepts(course) {
-        if (!course || !conceptList) return;
-
-        conceptList.replaceChildren();
-
-        const loading = document.createElement('p');
-        loading.textContent = 'Loading course concepts...';
-        conceptList.append(loading);
-
-        try {
-            const result = await api.get(
-                `/admin/submissions/courses/${encodeURIComponent(course.courseId)}/concept-management`
-            );
-
-            if (
-                result?.success !== true ||
-                !Array.isArray(result.assigned)
-            ) {
-                throw new Error('invalid_response');
-            }
-
-            course.concepts = result.assigned;
-
-            // Refresh the displayed concepts without changing course details.
-            renderSelected();
-        } catch {
-            conceptList.replaceChildren();
-
-            const error = document.createElement('p');
-            error.textContent = 'Course concepts could not be loaded. Please retry.';
-            conceptList.append(error);
-        }
-    }
-
-    async function load(keepId = courseSelect.value) {
-        pending = true;
-        updateButtons();
-
-        try {
-            const result = await api.get('/admin/submissions/courses');
-
-            if (
-                result?.success !== true ||
-                !Array.isArray(result.courses)
-            ) {
-                throw new Error('invalid_response');
-            }
-
-            courses = result.courses;
-
-            const options = courses.map(course =>
-                option(course.courseId, course.title)
-            );
-
-            courseSelect.replaceChildren(
-                option('', 'Select an approved course'),
-                ...options
-            );
-
-            prerequisiteSelect.replaceChildren(
-                option('', 'Select an approved course'),
-                ...options.map(item => item.cloneNode(true))
-            );
-
-            courseSelect.value = courses.some(
-                course => String(course.courseId) === String(keepId)
-            )
-                ? String(keepId)
-                : '';
-
-            renderSelected();
-
-            if (!courses.length) {
-                show('No approved courses yet. Approve a student course proposal first.');
-            } else if (message.dataset.state !== 'success') {
-                show('');
-            }
-
-            // Load the concepts already associated with the selected course.
-            await loadCourseConcepts(selected());
-
-        } catch {
-            show('Approved courses could not be loaded. Please retry.', 'error');
-        } finally {
-            pending = false;
             updateButtons();
         }
-    }
 
-    async function changePrerequisite(prerequisiteId, action) {
-        const course = selected();
+        async function loadCourseConcepts(course) {
+            if (!course || !conceptList) return;
 
-        if (!course || pending) return;
+            conceptList.replaceChildren();
 
-        pending = true;
-        updateButtons();
+            const loading = document.createElement('p');
+            loading.textContent = 'Loading course concepts...';
+            conceptList.append(loading);
 
-        try {
-            if (action === 'add') {
-                await api.post(
-                    `/admin/submissions/courses/${encodeURIComponent(course.courseId)}/prerequisites`,
+            try {
+                const result = await api.get(
+                    `/admin/submissions/courses/${encodeURIComponent(course.courseId)}/concept-management`
+                );
+
+                if (
+                    result?.success !== true ||
+                    !Array.isArray(result.assigned)
+                ) {
+                    throw new Error('invalid_response');
+                }
+
+                course.concepts = result.assigned;
+
+                // Refresh the displayed concepts without changing course details.
+                renderSelected();
+            } catch {
+                conceptList.replaceChildren();
+
+                const error = document.createElement('p');
+                error.textContent = 'Course concepts could not be loaded. Please retry.';
+                conceptList.append(error);
+            }
+        }
+
+        async function load(keepId = courseSelect.value) {
+            pending = true;
+            updateButtons();
+
+            try {
+                const result = await api.get('/admin/submissions/courses');
+
+                if (
+                    result?.success !== true ||
+                    !Array.isArray(result.courses)
+                ) {
+                    throw new Error('invalid_response');
+                }
+
+                courses = result.courses;
+
+                const options = courses.map(course =>
+                    option(course.courseId, course.title)
+                );
+
+                courseSelect.replaceChildren(
+                    option('', 'Select an approved course'),
+                    ...options
+                );
+
+                prerequisiteSelect.replaceChildren(
+                    option('', 'Select an approved course'),
+                    ...options.map(item => item.cloneNode(true))
+                );
+
+                courseSelect.value = courses.some(
+                    course => String(course.courseId) === String(keepId)
+                )
+                    ? String(keepId)
+                    : '';
+
+                renderSelected();
+
+                if (!courses.length) {
+                    show('No approved courses yet. Approve a student course proposal first.');
+                } else if (message.dataset.state !== 'success') {
+                    show('');
+                }
+
+                // Load the concepts already associated with the selected course.
+                await loadCourseConcepts(selected());
+
+            } catch {
+                show('Approved courses could not be loaded. Please retry.', 'error');
+            } finally {
+                pending = false;
+                updateButtons();
+            }
+        }
+
+        async function changePrerequisite(prerequisiteId, action) {
+            const course = selected();
+
+            if (!course || pending) return;
+
+            pending = true;
+            updateButtons();
+
+            try {
+                if (action === 'add') {
+                    await api.post(
+                        `/admin/submissions/courses/${encodeURIComponent(course.courseId)}/prerequisites`,
+                        {
+                            prerequisiteCourseId: prerequisiteId
+                        }
+                    );
+                } else {
+                    await api.delete(
+                        `/admin/submissions/courses/${encodeURIComponent(course.courseId)}/prerequisites/${encodeURIComponent(prerequisiteId)}`
+                    );
+                }
+
+                show(
+                    `Course prerequisite ${action === 'add' ? 'added' : 'removed'} and queued for synchronization.`,
+                    'success'
+                );
+
+                await load(course.courseId);
+
+            } catch (error) {
+                show(
+                    error.message || 'Course prerequisite could not be updated.',
+                    'error'
+                );
+            } finally {
+                pending = false;
+                updateButtons();
+            }
+        }
+
+        courseSelect.addEventListener('change', async () => {
+            renderSelected();
+            await loadCourseConcepts(selected());
+        });
+
+        prerequisiteSelect.addEventListener('change', updateButtons);
+        title.addEventListener('input', updateButtons);
+        difficulty.addEventListener('change', updateButtons);
+
+        editForm.addEventListener('submit', async event => {
+            event.preventDefault();
+
+            const course = selected();
+
+            if (!course || pending) return;
+
+            pending = true;
+            updateButtons();
+
+            try {
+                await api.patch(
+                    `/admin/submissions/courses/${encodeURIComponent(course.courseId)}`,
                     {
-                        prerequisiteCourseId: prerequisiteId
+                        title: title.value,
+                        description: description.value,
+                        difficultyLevel: difficulty.value
                     }
                 );
-            } else {
-                await api.delete(
-                    `/admin/submissions/courses/${encodeURIComponent(course.courseId)}/prerequisites/${encodeURIComponent(prerequisiteId)}`
+
+                show('Course details saved and queued for synchronization.', 'success');
+
+                await load(course.courseId);
+
+            } catch (error) {
+                show(
+                    error.message || 'Course details could not be saved.',
+                    'error'
                 );
+            } finally {
+                pending = false;
+                updateButtons();
             }
+        });
 
-            show(
-                `Course prerequisite ${action === 'add' ? 'added' : 'removed'} and queued for synchronization.`,
-                'success'
-            );
+        add.addEventListener('click', () => {
+            changePrerequisite(prerequisiteSelect.value, 'add');
+        });
 
-            await load(course.courseId);
+        load();
 
-        } catch (error) {
-            show(
-                error.message || 'Course prerequisite could not be updated.',
-                'error'
-            );
-        } finally {
-            pending = false;
-            updateButtons();
-        }
+        return { load };
     }
-
-    courseSelect.addEventListener('change', async () => {
-        renderSelected();
-        await loadCourseConcepts(selected());
-    });
-
-    prerequisiteSelect.addEventListener('change', updateButtons);
-    title.addEventListener('input', updateButtons);
-    difficulty.addEventListener('change', updateButtons);
-
-    editForm.addEventListener('submit', async event => {
-        event.preventDefault();
-
-        const course = selected();
-
-        if (!course || pending) return;
-
-        pending = true;
-        updateButtons();
-
-        try {
-            await api.patch(
-                `/admin/submissions/courses/${encodeURIComponent(course.courseId)}`,
-                {
-                    title: title.value,
-                    description: description.value,
-                    difficultyLevel: difficulty.value
-                }
-            );
-
-            show('Course details saved and queued for synchronization.', 'success');
-
-            await load(course.courseId);
-
-        } catch (error) {
-            show(
-                error.message || 'Course details could not be saved.',
-                'error'
-            );
-        } finally {
-            pending = false;
-            updateButtons();
-        }
-    });
-
-    add.addEventListener('click', () => {
-        changePrerequisite(prerequisiteSelect.value, 'add');
-    });
-
-    load();
-
-    return { load };
-}
 
     function initializeAdminSubmissionReview({ document, api, confirmFn = root.confirm?.bind(root) }) {
         const section = document.getElementById('admin-submission-review');

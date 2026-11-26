@@ -1344,21 +1344,13 @@ test('opening a resource refreshes a previously empty approved concept cache', a
                 if (path === '/admin/submissions/database-concepts') {
                     lookupCount += 1;
 
-                    return lookupCount === 1
-                        ? {
-                            success: true,
-                            domainAvailable: true,
-                            emptyReason: 'no_approved_concepts',
-                            concepts: []
-                        }
-                        : {
-                            success: true,
-                            domainAvailable: true,
-                            concepts: [{
-                                concept_id: 88,
-                                name: 'Normalization'
-                            }]
-                        };
+                    return {
+                        success: true,
+                        domainAvailable: true,
+                        concepts: [
+                            { concept_id: 88, name: 'Normalization' }
+                        ]
+                    };
                 }
 
                 if (path === '/admin/submissions/25') {
@@ -1382,7 +1374,7 @@ test('opening a resource refreshes a previously empty approved concept cache', a
     await new Promise(resolve => setImmediate(resolve));
     await controller.openDetail(25);
 
-    assert.equal(lookupCount, 2);
+    assert.equal(lookupCount, 1);
 
     assert.deepEqual(
         elements.resourceConcept.children.slice(1).map(option => option.value),
@@ -1416,9 +1408,27 @@ test('prerequisite controls stay hidden with fewer than two approved Database Co
                 elements,
                 api: {
                     async get(path) {
-                        return path === '/admin/submissions/database-concepts'
-                            ? { success: true, concepts }
-                            : queueResult([], 1, 0, 0);
+                        if (path === '/admin/submissions/approved-course-concepts') {
+                            return {
+                                success: true,
+                                courses: concepts.length
+                                    ? [{
+                                        courseId: 'COURSE-1',
+                                        name: 'Database Concepts',
+                                        concepts: concepts.map(concept => ({
+                                            conceptId: concept.concept_id,
+                                            name: concept.name
+                                        }))
+                                    }]
+                                    : []
+                            };
+                        }
+
+                        if (path === '/admin/submissions/database-concepts') {
+                            return { success: true, concepts };
+                        }
+
+                        return queueResult([], 1, 0, 0);
                     }
                 }
             });
@@ -1432,7 +1442,7 @@ test('prerequisite controls stay hidden with fewer than two approved Database Co
 
             assert.match(
                 elements.prerequisiteMessage.textContent,
-                /at least two approved Database Concepts must exist/i
+                /at least two approved course concepts must exist/i
             );
 
             assert.ok(controller);
@@ -1465,13 +1475,17 @@ test('prerequisite controls appear with two concepts and require distinct select
         elements,
         api: {
             async get(path) {
-                if (path === '/admin/submissions/database-concepts') {
+                if (path === '/admin/submissions/approved-course-concepts') {
                     return {
                         success: true,
-                        concepts: [
-                            { concept_id: 31, name: 'Tables' },
-                            { concept_id: 32, name: 'Keys' }
-                        ]
+                        courses: [{
+                            courseId: 'COURSE-1',
+                            name: 'Database Concepts',
+                            concepts: [
+                                { conceptId: 31, name: 'Tables' },
+                                { conceptId: 32, name: 'Keys' }
+                            ]
+                        }]
                     };
                 }
 

@@ -9,6 +9,7 @@ const {
     getAdminSubmissions,
     getOutboxStatistics,
     getDatabaseConceptOptions,
+    getApprovedCourseConceptOptions,
     getCourseConceptOptions,
     createAdministratorPrerequisiteSubmission,
     retryFailedOutboxTask,
@@ -144,13 +145,37 @@ router.get('/database-concepts', async (_req, res) => {
     }
 });
 
+router.get('/approved-course-concepts', async (_req, res) => {
+    try {
+        const courses = await getApprovedCourseConceptOptions();
+
+        return res.json({
+            success: true,
+            courses
+        });
+    } catch (error) {
+        console.error(
+            '[Admin submissions] Approved course concepts lookup failed:',
+            error.message
+        );
+
+        return res.status(500).json({
+            success: false,
+            message: 'Approved course concepts could not be loaded.'
+        });
+    }
+});
+
 router.post('/prerequisites', async (req, res) => {
     const prerequisiteId = req.body?.prerequisiteId;
     const targetId = req.body?.targetId;
     if (![prerequisiteId, targetId].every(value =>
         (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) ||
         (typeof value === 'string' && /^[1-9]\d*$/.test(value)))) {
-        return res.status(400).json({ success: false, message: 'Choose two existing Database Concepts.' });
+        return res.status(400).json({
+            success: false,
+            message: 'Choose two existing approved course concepts.'
+        });
     }
     try {
         const submission = await createAdministratorPrerequisiteSubmission({

@@ -153,30 +153,68 @@ async function getDatabaseConcepts() {
     return (await getDatabaseConceptOptions()).concepts;
 }
 
-async function createAdministratorPrerequisiteSubmission({ prerequisiteId, targetId, adminId }) {
+async function createAdministratorPrerequisiteSubmission({
+    prerequisiteId,
+    targetId,
+    adminId
+}) {
     const prerequisite = Number(prerequisiteId);
     const target = Number(targetId);
-    if (!Number.isSafeInteger(prerequisite) || prerequisite < 1 || !Number.isSafeInteger(target) || target < 1) {
-        throw new ApprovalError('invalid_concept_reference', 'Select two valid Database Concepts.', 400);
+
+    if (
+        !Number.isSafeInteger(prerequisite) ||
+        prerequisite < 1 ||
+        !Number.isSafeInteger(target) ||
+        target < 1
+    ) {
+        throw new ApprovalError(
+            'invalid_concept_reference',
+            'Select two valid approved course concepts.',
+            400
+        );
     }
-    if (prerequisite === target) throw new ApprovalError('self_prerequisite', 'A concept cannot be its own prerequisite.', 400);
-    const courseIds = await getDatabaseDomainCourseIds();
-    if (!courseIds.length) throw new ApprovalError('database_domain_unavailable', 'The existing Database Concepts course is unavailable.', 422);
-    const placeholders = courseIds.map(() => '?').join(', ');
+
+    if (prerequisite === target) {
+        throw new ApprovalError(
+            'self_prerequisite',
+            'A concept cannot be its own prerequisite.',
+            400
+        );
+    }
+
     const [rows] = await mysql.execute(
-        `SELECT DISTINCT c.concept_id
-         FROM concept AS c
-         INNER JOIN concept_course AS cc ON cc.concept_id = c.concept_id
-         WHERE c.concept_id IN (?, ?) AND c.graph_concept_id IS NOT NULL
-           AND cc.course_graph_id IN (${placeholders})`, [prerequisite, target, ...courseIds]
+        `SELECT DISTINCT concept.concept_id
+         FROM concept
+         INNER JOIN concept_course
+             ON concept_course.concept_id = concept.concept_id
+         INNER JOIN course
+             ON course.graph_course_id = concept_course.course_graph_id
+         WHERE concept.concept_id IN (?, ?)
+           AND concept.graph_concept_id IS NOT NULL
+           AND TRIM(concept.graph_concept_id) <> ''
+           AND course.graph_course_id IS NOT NULL
+           AND TRIM(course.graph_course_id) <> ''`,
+        [prerequisite, target]
     );
-    if (new Set(rows.map(row => Number(row.concept_id))).size !== 2) {
-        throw new ApprovalError('invalid_concept_reference', 'Both selected concepts must belong to Database Concepts.', 422);
+
+    if (
+        new Set(rows.map(row => Number(row.concept_id))).size !== 2
+    ) {
+        throw new ApprovalError(
+            'invalid_concept_reference',
+            'Both concepts must be approved concepts associated with a course.',
+            422
+        );
     }
-    return createPendingSubmission('PREREQUISITE', {
-        prerequisiteId: prerequisite,
-        targetId: target
-    }, adminId);
+
+    return createPendingSubmission(
+        'PREREQUISITE',
+        {
+            prerequisiteId: prerequisite,
+            targetId: target
+        },
+        adminId
+    );
 }
 
 class ApprovalError extends Error {
