@@ -16,7 +16,7 @@ function loadConfig(location, initialConfig = undefined) {
 
 test('frontend configuration defaults production to same-origin and local development to localhost API', () => {
     assert.equal(loadConfig({ origin: 'https://learn.example', hostname: 'learn.example', protocol: 'https:' }).apiBaseUrl,
-        'https://learn.example/api');
+        'https://neurolearn-backend-xo55.onrender.com/api');
     assert.equal(loadConfig({ origin: 'http://localhost:5500', hostname: 'localhost', protocol: 'http:' }).apiBaseUrl,
         'http://localhost:5000/api');
 });

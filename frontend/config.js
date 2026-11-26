@@ -13,8 +13,8 @@
         ['localhost', '127.0.0.1', '::1'].includes(hostname);
 
     const defaultApiBaseUrl = local
-    ? 'http://localhost:5000/api'
-    : `${String(location.origin || '').replace(/\/+$/, '')}/api`;
+        ? 'http://localhost:5000/api'
+        : 'https://neurolearn-backend-xo55.onrender.com/api';
 
     runtime.NEUROLEARN_CONFIG = Object.freeze({
         ...existing,
