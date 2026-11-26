@@ -12,10 +12,7 @@
 </head>
 
 <body>
-    <p class="page-session-message nl-loading-indicator"
-        id="quizzes-session-message"
-        role="status"
-        aria-label="Loading"
+    <p class="page-session-message nl-loading-indicator" id="quizzes-session-message" role="status" aria-label="Loading"
         aria-busy="true">
         <span class="nl-spinner" aria-hidden="true"></span>
         <span class="nl-sr-only">Loading</span>
@@ -36,11 +33,7 @@
         </div>
 
         <div class="user-profile">
-            <img
-                src="https://via.placeholder.com/35"
-                alt="User profile"
-                class="user-avatar"
-            >
+            <img src="https://via.placeholder.com/35" alt="User profile" class="user-avatar">
 
             <span id="learner-name">Learner</span>
 
@@ -50,9 +43,7 @@
         </div>
     </header>
 
-    <main class="main-container quizzes-container"
-        id="quizzes-content"
-        hidden>
+    <main class="main-container quizzes-container" id="quizzes-content" hidden>
 
         <section class="subheader">
             <div class="ai-badge">TEST YOUR UNDERSTANDING</div>
@@ -60,54 +51,12 @@
             <h1>My Quizzes</h1>
 
             <p>
-                Explore quizzes from your approved learning materials
-                and review your previous quiz attempts.
+                View your quiz attempts, scores, topics and answer reviews.
             </p>
-        </section>
-
-        <!-- Available Quizzes -->
-        <section class="quizzes-section"
-            aria-labelledby="available-quizzes-heading">
-
-            <div class="section-title" id="available-quizzes-heading">
-                Available Quizzes
-            </div>
-
-            <p class="section-subtitle">
-                These learning materials are approved and ready for
-                AI-powered quiz generation in the Study Workspace.
-            </p>
-
-            <div class="quizzes-toolbar">
-                <label for="quiz-course-filter">Filter by course</label>
-
-                <select id="quiz-course-filter">
-                    <option value="">All courses</option>
-                </select>
-
-                <button
-                    type="button"
-                    class="quizzes-refresh-button"
-                    id="refresh-available-quizzes">
-                    Refresh
-                </button>
-            </div>
-
-            <p id="available-quizzes-status"
-                class="quizzes-status"
-                role="status"
-                aria-live="polite">
-                Loading available learning materials...
-            </p>
-
-            <div id="available-quizzes-list"
-                class="available-quizzes-grid">
-            </div>
         </section>
 
         <!-- Quiz Results and History -->
-        <section class="quizzes-section"
-            aria-labelledby="quiz-history-heading">
+        <section class="quizzes-section" aria-labelledby="quiz-history-heading">
 
             <div class="section-title" id="quiz-history-heading">
                 Quiz Results &amp; History
@@ -117,15 +66,11 @@
                 Review your previous attempts, scores and answers.
             </p>
 
-            <p id="quiz-history-status"
-                class="quizzes-status"
-                role="status"
-                aria-live="polite">
+            <p id="quiz-history-status" class="quizzes-status" role="status" aria-live="polite">
                 Loading your quiz history...
             </p>
 
-            <div id="quiz-history-list"
-                class="quiz-history-list">
+            <div id="quiz-history-list" class="quiz-history-list">
             </div>
         </section>
 

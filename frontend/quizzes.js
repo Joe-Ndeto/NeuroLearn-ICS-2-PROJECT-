@@ -165,6 +165,16 @@ function renderQuizReview(review) {
 ========================================= */
 
 function getTopicName(attempt) {
+    const conceptNames = Array.isArray(attempt.conceptResults)
+        ? attempt.conceptResults
+            .map(result => result.conceptName)
+            .filter(name => typeof name === 'string' && name.trim())
+        : [];
+
+    if (conceptNames.length > 0) {
+        return [...new Set(conceptNames)].join(', ');
+    }
+
     return (
         attempt.conceptName ||
         attempt.concept_name ||
@@ -176,7 +186,6 @@ function getTopicName(attempt) {
         'Topic information unavailable'
     );
 }
-
 function getCourseName(attempt) {
     return (
         attempt.courseName ||

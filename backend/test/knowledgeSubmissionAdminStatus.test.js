@@ -53,8 +53,13 @@ const mysql = {
         if (query.includes('WHERE s.submission_id = ?')) {
             return [filtered.filter(row => row.submission_id === values[0]), []];
         }
-        const limit = values[values.length - 2];
-        const offset = values[values.length - 1];
+        const paginationMatch = query.match(/LIMIT\s+(\d+)\s+OFFSET\s+(\d+)/i);
+
+        assert.ok(paginationMatch, 'Expected query to contain validated LIMIT and OFFSET values');
+
+        const limit = Number(paginationMatch[1]);
+        const offset = Number(paginationMatch[2]);
+
         return [filtered.slice(offset, offset + limit), []];
     }
 };
@@ -98,7 +103,7 @@ test('administrator list preserves filters, limit, and offset without N+1 lookup
     assert.equal(result.total, 2);
     assert.equal(result.submissions[0].submissionId, 5);
     assert.equal(queries.length, 2);
-    assert.ok(queries[1].includes('LIMIT ? OFFSET ?'));
+    assert.match(queries[1], /LIMIT 1 OFFSET 1/i);
     assert.ok(queries[1].includes('LEFT JOIN knowledge_sync_outbox'));
 });
 
