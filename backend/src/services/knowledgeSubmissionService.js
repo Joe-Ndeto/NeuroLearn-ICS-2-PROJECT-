@@ -599,7 +599,6 @@ async function reviewPendingSubmission({
     let preflight;
     let validatedSubmissionData;
     let validatedCourseIds;
-    let validatedDomainCourseIds;
     let validatedGraphCourseId;
 
     if (status === 'approved') {
@@ -693,10 +692,8 @@ async function reviewPendingSubmission({
             }
             validatedSubmissionData = { ...validatedSubmissionData, selectedConceptId };
         } else if (preflight.submission_type === 'PREREQUISITE') {
-            validatedDomainCourseIds = await getDatabaseDomainCourseIds();
-            if (!validatedDomainCourseIds.length) {
-                throw new ApprovalError('database_domain_unavailable', 'The existing Database Concepts course is unavailable.', 422);
-            }
+            // Prerequisites can connect concepts from any approved course.
+            // The concepts and their graph mappings are validated inside the transaction.
         }
     }
 
@@ -856,29 +853,41 @@ async function reviewPendingSubmission({
                 if (!referencedPrerequisite || !referencedTarget) {
                     throw new ApprovalError('invalid_concept_reference', 'Both prerequisite concepts must exist in MySQL.', 422);
                 }
-                const domainPlaceholders = validatedDomainCourseIds.map(() => '?').join(', ');
-                const [domainConcepts] = await connection.execute(
+                const [approvedConcepts] = await connection.execute(
                     `SELECT DISTINCT c.concept_id, c.graph_concept_id
-                     FROM concept AS c
-                     INNER JOIN concept_course AS cc ON cc.concept_id = c.concept_id
-                     WHERE c.concept_id IN (?, ?) AND c.graph_concept_id IS NOT NULL
-                       AND cc.course_graph_id IN (${domainPlaceholders})
-                     FOR UPDATE`,
-                    [referencedPrerequisite.concept_id, referencedTarget.concept_id, ...validatedDomainCourseIds]
+     FROM concept AS c
+     INNER JOIN concept_course AS cc
+        ON cc.concept_id = c.concept_id
+     INNER JOIN course AS course
+        ON course.graph_course_id = cc.course_graph_id
+     WHERE c.concept_id IN (?, ?)
+       AND c.graph_concept_id IS NOT NULL
+       AND TRIM(c.graph_concept_id) <> ''
+       AND course.graph_course_id IS NOT NULL
+       AND TRIM(course.graph_course_id) <> ''
+     FOR UPDATE`,
+                    [
+                        referencedPrerequisite.concept_id,
+                        referencedTarget.concept_id
+                    ]
                 );
-                const byId = new Map(domainConcepts.map(row => [Number(row.concept_id), row]));
+
+                const byId = new Map(
+                    approvedConcepts.map(row => [Number(row.concept_id), row])
+                );
+
                 const prerequisite = byId.get(Number(referencedPrerequisite.concept_id));
                 const target = byId.get(Number(referencedTarget.concept_id));
 
-                if (!prerequisite || !target ||
-                    !prerequisite.graph_concept_id || !target.graph_concept_id) {
+                if (!prerequisite || !target) {
                     throw new ApprovalError(
                         'invalid_concept_reference',
-                        'Both prerequisite concepts must exist and have graph mappings.',
+                        'Both prerequisite concepts must belong to approved courses and have graph mappings.',
                         422
                     );
                 }
-                if (prerequisite.concept_id === target.concept_id) {
+
+                if (Number(prerequisite.concept_id) === Number(target.concept_id)) {
                     throw new ApprovalError(
                         'self_prerequisite',
                         'A concept cannot be its own prerequisite.',
