@@ -715,189 +715,286 @@
         };
     }
 
-    function initializeCourseManagement({ document, api }) {
-        const section = document.getElementById('admin-course-management');
-        if (!section || !api.isAdministrator()) return null;
-        const get = id => document.getElementById(id);
-        const courseSelect = get('admin-course-select');
-        const title = get('admin-course-title');
-        const description = get('admin-course-description');
-        const difficulty = get('admin-course-difficulty');
-        const editForm = get('admin-course-edit-form');
-        const save = get('admin-course-save');
-        const prerequisiteSelect = get('admin-course-prerequisite-select');
-        const add = get('admin-course-prerequisite-add');
-        const list = get('admin-course-prerequisite-list');
-        const conceptSelect = get('admin-course-concept-select');
-        const conceptAdd = get('admin-course-concept-add');
-        const conceptList = get('admin-course-concept-list');
-        const message = get('admin-course-management-message');
-        let courses = [];
-        let pending = false;
-        let conceptOptionsAvailable = false;
-        const selected = () => courses.find(course => String(course.courseId) === courseSelect.value) || null;
-        const option = (value, text) => {
-            const item = document.createElement('option');
-            item.value = String(value);
-            item.textContent = String(text);
-            return item;
-        };
-        const show = (text, state = 'info') => {
-            message.textContent = text;
-            message.dataset.state = state;
-            message.hidden = !text;
-        };
-        const updateButtons = () => {
-            const course = selected();
-            save.disabled = pending || !course || !title.value.trim() || !difficulty.value;
-            add.disabled = pending || !course || !prerequisiteSelect.value || prerequisiteSelect.value === courseSelect.value;
-            if (conceptSelect) conceptSelect.disabled = pending || !selected() || !conceptOptionsAvailable;
-            if (conceptAdd) conceptAdd.disabled = pending || !selected() || !conceptSelect?.value;
-        };
-        function renderSelected() {
-            const course = selected();
-            title.value = course?.title || '';
-            description.value = course?.description || '';
-            difficulty.value = course?.difficultyLevel || '';
-            list.replaceChildren();
-            for (const prerequisite of course?.prerequisites || []) {
-                const row = document.createElement('p');
-                row.append(document.createTextNode(`${prerequisite.title} must be completed first. `));
-                const remove = document.createElement('button');
-                remove.type = 'button';
-                remove.className = 'btn-outline';
-                remove.textContent = 'Remove';
-                remove.addEventListener('click', () => changePrerequisite(prerequisite.courseId, 'remove'));
-                row.append(remove);
-                list.append(row);
-            }
-            if (conceptList) {
-                conceptList.replaceChildren();
-                const concepts = course?.concepts || [];
-                if (!concepts.length) {
-                    const empty = document.createElement('p');
-                    empty.textContent = 'No concepts are assigned to this course yet.';
-                    conceptList.append(empty);
-                } else {
-                    for (const concept of concepts) {
-                        const item = document.createElement('p');
-                        item.textContent = concept.name;
-                        conceptList.append(item);
-                    }
+function initializeCourseManagement({ document, api }) {
+    const section = document.getElementById('admin-course-management');
+    if (!section || !api.isAdministrator()) return null;
+
+    const get = id => document.getElementById(id);
+    const courseSelect = get('admin-course-select');
+    const title = get('admin-course-title');
+    const description = get('admin-course-description');
+    const difficulty = get('admin-course-difficulty');
+    const editForm = get('admin-course-edit-form');
+    const save = get('admin-course-save');
+    const prerequisiteSelect = get('admin-course-prerequisite-select');
+    const add = get('admin-course-prerequisite-add');
+    const list = get('admin-course-prerequisite-list');
+    const conceptList = get('admin-course-concept-list');
+    const message = get('admin-course-management-message');
+
+    let courses = [];
+    let pending = false;
+
+    const selected = () =>
+        courses.find(course => String(course.courseId) === courseSelect.value) || null;
+
+    const option = (value, text) => {
+        const item = document.createElement('option');
+        item.value = String(value);
+        item.textContent = String(text);
+        return item;
+    };
+
+    const show = (text, state = 'info') => {
+        message.textContent = text;
+        message.dataset.state = state;
+        message.hidden = !text;
+    };
+
+    const updateButtons = () => {
+        const course = selected();
+
+        save.disabled = pending || !course || !title.value.trim() || !difficulty.value;
+
+        add.disabled = pending ||
+            !course ||
+            !prerequisiteSelect.value ||
+            prerequisiteSelect.value === courseSelect.value;
+    };
+
+    function renderSelected() {
+        const course = selected();
+
+        title.value = course?.title || '';
+        description.value = course?.description || '';
+        difficulty.value = course?.difficultyLevel || '';
+
+        list.replaceChildren();
+
+        for (const prerequisite of course?.prerequisites || []) {
+            const row = document.createElement('p');
+
+            row.append(
+                document.createTextNode(
+                    `${prerequisite.title} must be completed first. `
+                )
+            );
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'btn-outline';
+            remove.textContent = 'Remove';
+
+            remove.addEventListener('click', () => {
+                changePrerequisite(prerequisite.courseId, 'remove');
+            });
+
+            row.append(remove);
+            list.append(row);
+        }
+
+        if (conceptList) {
+            conceptList.replaceChildren();
+
+            const concepts = course?.concepts || [];
+
+            if (!concepts.length) {
+                const empty = document.createElement('p');
+                empty.textContent = 'No concepts are assigned to this course yet.';
+                conceptList.append(empty);
+            } else {
+                for (const concept of concepts) {
+                    const item = document.createElement('p');
+                    item.textContent = concept.name;
+                    conceptList.append(item);
                 }
             }
-            updateButtons();
         }
-        async function load(keepId = courseSelect.value) {
-            pending = true;
-            updateButtons();
-            try {
-                const result = await api.get('/admin/submissions/courses');
-                if (result?.success !== true || !Array.isArray(result.courses)) throw new Error('invalid_response');
-                courses = result.courses;
-                const options = courses.map(course => option(course.courseId, course.title));
-                courseSelect.replaceChildren(option('', 'Select an approved course'), ...options);
-                prerequisiteSelect.replaceChildren(option('', 'Select an approved course'), ...options.map(item => item.cloneNode(true)));
-                courseSelect.value = courses.some(course => String(course.courseId) === String(keepId)) ? String(keepId) : '';
-                renderSelected();
-                if (!courses.length) show('No approved courses yet. Approve a student course proposal first.');
-                else if (message.dataset.state !== 'success') show('');
-                await loadConceptOptions(selected());
-            } catch {
-                show('Approved courses could not be loaded. Please retry.', 'error');
-            } finally {
-                pending = false;
-                updateButtons();
-            }
-        }
-        async function loadConceptOptions(course) {
-            if (!conceptSelect) return;
-            conceptOptionsAvailable = false;
-            conceptSelect.replaceChildren(option('', course ? 'Loading approved concepts…' : 'Select a course first'));
-            conceptSelect.disabled = true;
-            if (!course) return;
-            try {
-                const result = await api.get(`/admin/submissions/courses/${encodeURIComponent(course.courseId)}/concept-management`);
-                if (result?.success !== true || !Array.isArray(result.assigned) || !Array.isArray(result.available)) {
-                    throw new Error('invalid_response');
-                }
-                course.concepts = result.assigned;
-                renderSelected();
-                conceptSelect.replaceChildren(option('', result.available.length ? 'Select an approved concept' : 'No additional approved concepts'),
-                    ...result.available.map(concept => option(concept.conceptId, concept.name)));
-                conceptOptionsAvailable = result.available.length > 0;
-            } catch {
-                conceptSelect.replaceChildren(option('', 'Concept lookup failed'));
-                show('Approved concepts could not be loaded. Select the course again to retry.', 'error');
-            }
-            updateButtons();
-        }
-        async function changePrerequisite(prerequisiteId, action) {
-            const course = selected();
-            if (!course || pending) return;
-            pending = true;
-            updateButtons();
-            try {
-                if (action === 'add') {
-                    await api.post(`/admin/submissions/courses/${encodeURIComponent(course.courseId)}/prerequisites`, { prerequisiteCourseId: prerequisiteId });
-                } else {
-                    await api.delete(`/admin/submissions/courses/${encodeURIComponent(course.courseId)}/prerequisites/${encodeURIComponent(prerequisiteId)}`);
-                }
-                show(`Course prerequisite ${action === 'add' ? 'added' : 'removed'} and queued for synchronization.`, 'success');
-                await load(course.courseId);
-            } catch (error) {
-                show(error.message || 'Course prerequisite could not be updated.', 'error');
-            } finally {
-                pending = false;
-                updateButtons();
-            }
-        }
-        async function assignConcept() {
-            const course = selected();
-            if (!course || !conceptSelect?.value || pending) return;
-            pending = true;
-            updateButtons();
-            try {
-                await api.post(`/admin/submissions/courses/${encodeURIComponent(course.courseId)}/concepts`, {
-                    conceptId: conceptSelect.value
-                });
-                show('Concept assigned to this course and queued for graph synchronization.', 'success');
-                await load(course.courseId);
-            } catch (error) {
-                show(error.message || 'The concept could not be assigned to this course.', 'error');
-            } finally {
-                pending = false;
-                updateButtons();
-            }
-        }
-        courseSelect.addEventListener('change', () => {
-            renderSelected();
-            loadConceptOptions(selected());
-        });
-        prerequisiteSelect.addEventListener('change', updateButtons);
-        title.addEventListener('input', updateButtons);
-        difficulty.addEventListener('change', updateButtons);
-        editForm.addEventListener('submit', async event => {
-            event.preventDefault();
-            const course = selected();
-            if (!course || pending) return;
-            pending = true;
-            updateButtons();
-            try {
-                await api.patch(`/admin/submissions/courses/${encodeURIComponent(course.courseId)}`, {
-                    title: title.value, description: description.value, difficultyLevel: difficulty.value
-                });
-                show('Course details saved and queued for synchronization.', 'success');
-                await load(course.courseId);
-            } catch (error) { show(error.message || 'Course details could not be saved.', 'error'); }
-            finally { pending = false; updateButtons(); }
-        });
-        add.addEventListener('click', () => changePrerequisite(prerequisiteSelect.value, 'add'));
-        conceptSelect?.addEventListener('change', updateButtons);
-        conceptAdd?.addEventListener('click', assignConcept);
-        load();
-        return { load };
+
+        updateButtons();
     }
+
+    async function loadCourseConcepts(course) {
+        if (!course || !conceptList) return;
+
+        conceptList.replaceChildren();
+
+        const loading = document.createElement('p');
+        loading.textContent = 'Loading course concepts...';
+        conceptList.append(loading);
+
+        try {
+            const result = await api.get(
+                `/admin/submissions/courses/${encodeURIComponent(course.courseId)}/concept-management`
+            );
+
+            if (
+                result?.success !== true ||
+                !Array.isArray(result.assigned)
+            ) {
+                throw new Error('invalid_response');
+            }
+
+            course.concepts = result.assigned;
+
+            // Refresh the displayed concepts without changing course details.
+            renderSelected();
+        } catch {
+            conceptList.replaceChildren();
+
+            const error = document.createElement('p');
+            error.textContent = 'Course concepts could not be loaded. Please retry.';
+            conceptList.append(error);
+        }
+    }
+
+    async function load(keepId = courseSelect.value) {
+        pending = true;
+        updateButtons();
+
+        try {
+            const result = await api.get('/admin/submissions/courses');
+
+            if (
+                result?.success !== true ||
+                !Array.isArray(result.courses)
+            ) {
+                throw new Error('invalid_response');
+            }
+
+            courses = result.courses;
+
+            const options = courses.map(course =>
+                option(course.courseId, course.title)
+            );
+
+            courseSelect.replaceChildren(
+                option('', 'Select an approved course'),
+                ...options
+            );
+
+            prerequisiteSelect.replaceChildren(
+                option('', 'Select an approved course'),
+                ...options.map(item => item.cloneNode(true))
+            );
+
+            courseSelect.value = courses.some(
+                course => String(course.courseId) === String(keepId)
+            )
+                ? String(keepId)
+                : '';
+
+            renderSelected();
+
+            if (!courses.length) {
+                show('No approved courses yet. Approve a student course proposal first.');
+            } else if (message.dataset.state !== 'success') {
+                show('');
+            }
+
+            // Load the concepts already associated with the selected course.
+            await loadCourseConcepts(selected());
+
+        } catch {
+            show('Approved courses could not be loaded. Please retry.', 'error');
+        } finally {
+            pending = false;
+            updateButtons();
+        }
+    }
+
+    async function changePrerequisite(prerequisiteId, action) {
+        const course = selected();
+
+        if (!course || pending) return;
+
+        pending = true;
+        updateButtons();
+
+        try {
+            if (action === 'add') {
+                await api.post(
+                    `/admin/submissions/courses/${encodeURIComponent(course.courseId)}/prerequisites`,
+                    {
+                        prerequisiteCourseId: prerequisiteId
+                    }
+                );
+            } else {
+                await api.delete(
+                    `/admin/submissions/courses/${encodeURIComponent(course.courseId)}/prerequisites/${encodeURIComponent(prerequisiteId)}`
+                );
+            }
+
+            show(
+                `Course prerequisite ${action === 'add' ? 'added' : 'removed'} and queued for synchronization.`,
+                'success'
+            );
+
+            await load(course.courseId);
+
+        } catch (error) {
+            show(
+                error.message || 'Course prerequisite could not be updated.',
+                'error'
+            );
+        } finally {
+            pending = false;
+            updateButtons();
+        }
+    }
+
+    courseSelect.addEventListener('change', async () => {
+        renderSelected();
+        await loadCourseConcepts(selected());
+    });
+
+    prerequisiteSelect.addEventListener('change', updateButtons);
+    title.addEventListener('input', updateButtons);
+    difficulty.addEventListener('change', updateButtons);
+
+    editForm.addEventListener('submit', async event => {
+        event.preventDefault();
+
+        const course = selected();
+
+        if (!course || pending) return;
+
+        pending = true;
+        updateButtons();
+
+        try {
+            await api.patch(
+                `/admin/submissions/courses/${encodeURIComponent(course.courseId)}`,
+                {
+                    title: title.value,
+                    description: description.value,
+                    difficultyLevel: difficulty.value
+                }
+            );
+
+            show('Course details saved and queued for synchronization.', 'success');
+
+            await load(course.courseId);
+
+        } catch (error) {
+            show(
+                error.message || 'Course details could not be saved.',
+                'error'
+            );
+        } finally {
+            pending = false;
+            updateButtons();
+        }
+    });
+
+    add.addEventListener('click', () => {
+        changePrerequisite(prerequisiteSelect.value, 'add');
+    });
+
+    load();
+
+    return { load };
+}
 
     function initializeAdminSubmissionReview({ document, api, confirmFn = root.confirm?.bind(root) }) {
         const section = document.getElementById('admin-submission-review');
